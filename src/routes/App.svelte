@@ -160,7 +160,6 @@
     const initialize = async () => {
       if (desktopPersistence) await repository.loadAsync();
       refresh();
-    void repository.flush();
       const schedulerStop = startReminderScheduler(repository, (reminder) => { void notifyReminder(reminder); });
       stop = schedulerStop;
     };
