@@ -1,0 +1,24 @@
+:root {
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  color: #202938;
+  background: #f4f6fb;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --ink: #202938;
+  --ink-soft: #56657a;
+  --ink-muted: #8b98aa;
+  --surface: #ffffff;
+  --surface-subtle: #f8faff;
+  --nav: #202b3d;
+  --nav-soft: #33445e;
+  --line: #e2e8f1;
+  --accent: #4f6df5;
+  --accent-strong: #3d59d2;
+  --danger: #c65d54;
+  --success: #39815d;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 1060px; min-height: 100vh; }
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; }
