@@ -1,11 +1,17 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import type { MemoDraft } from '$lib/data/repository';
+  import SelectMenu from './SelectMenu.svelte';
 
   export let onSave: (draft: MemoDraft) => void = () => {};
   export let initial: Partial<MemoDraft> = {};
 
-  const dispatch = createEventDispatcher<{ save: MemoDraft }>();
+  const dispatch = createEventDispatcher<{ save: MemoDraft; cancel: void }>();
+  const categoryOptions = [
+    { value: 'course', label: '课程' },
+    { value: 'life', label: '生活' },
+    { value: 'inbox', label: '待整理' },
+  ];
   let title = initial.title ?? '';
   let body = initial.body ?? '';
   let reminderAt = initial.reminderAt ?? '';
@@ -54,7 +60,10 @@
       <p class="eyebrow">{standalone ? '新建提醒' : '新建事项'}</p>
       <h2>{standalone ? '只提醒我这件事' : '写下现在要记住的事'}</h2>
     </div>
-    <button class="primary" type="submit">{standalone ? '保存提醒' : '保存备忘录'}</button>
+    <div class="editor-actions">
+      <button class="editor-cancel" type="button" aria-label="关闭编辑器" title="关闭" on:click={() => dispatch('cancel')}>×</button>
+      <button class="primary" type="submit">{standalone ? '保存提醒' : '保存备忘录'}</button>
+    </div>
   </div>
 
   <label>
@@ -74,14 +83,10 @@
     </div>
 
     <div class="form-grid">
-      <label>
+      <div class="field-label">
         <span>分类</span>
-        <select aria-label="分类" bind:value={categoryId}>
-          <option value="course">课程</option>
-          <option value="life">生活</option>
-          <option value="inbox">待整理</option>
-        </select>
-      </label>
+        <SelectMenu label="分类" bind:value={categoryId} options={categoryOptions} />
+      </div>
       <label>
         <span>标签</span>
         <input aria-label="标签" bind:value={tagsText} placeholder="用逗号分隔，例如：旅行, 清单" />
@@ -116,21 +121,24 @@
 <style>
   .editor-form { display:flex; flex-direction:column; gap:18px; }
   .editor-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
-  .eyebrow { margin:0 0 5px; color:var(--ink-muted); font-size:.75rem; letter-spacing:.08em; text-transform:uppercase; }
+  .editor-actions { display:flex; align-items:center; gap:8px; flex:none; }
+  .eyebrow { margin:0 0 5px; color:var(--accent); font-size:.7rem; font-weight:750; letter-spacing:.12em; text-transform:uppercase; }
   h2 { margin:0; font-size:1.45rem; letter-spacing:-.035em; }
-  label { display:flex; flex-direction:column; gap:7px; color:var(--ink-soft); font-size:.8rem; font-weight:650; }
+  label, .field-label { display:flex; flex-direction:column; gap:7px; color:var(--ink-soft); font-size:.8rem; font-weight:650; }
   .field { display:flex; flex-direction:column; gap:7px; }
-  input, textarea, select { box-sizing:border-box; width:100%; border:1px solid var(--line); border-radius:11px; padding:11px 12px; background:var(--surface); color:var(--ink); font:inherit; font-weight:400; outline:0; }
+  input, textarea, select { box-sizing:border-box; width:100%; border:1px solid var(--line); border-radius:8px; padding:11px 12px; background:var(--surface); color:var(--ink); font:inherit; font-weight:400; outline:0; }
   textarea { resize:vertical; line-height:1.6; }
-  input:focus, textarea:focus, select:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(79,109,245,.12); }
+  input:focus, textarea:focus, select:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(7,143,131,.12); }
   .toolbar { display:flex; gap:5px; margin-bottom:-2px; }
   .toolbar button { width:30px; height:29px; border:1px solid var(--line); border-radius:7px; background:var(--surface-subtle); color:var(--ink-soft); }
   .toolbar button:hover { border-color:var(--accent); color:var(--accent); }
   .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-  .primary { border:0; border-radius:10px; padding:10px 14px; background:var(--accent); color:#fff; font:inherit; font-weight:700; cursor:pointer; box-shadow:0 5px 14px rgba(79,109,245,.2); }
+  .primary { border:0; border-radius:8px; padding:10px 14px; background:var(--accent); color:#fff; font:inherit; font-weight:750; cursor:pointer; box-shadow:0 6px 16px rgba(7,143,131,.2); }
   .primary:hover { background:var(--accent-strong); }
+  .editor-cancel { display:grid; place-items:center; width:42px; height:42px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink-soft); font-size:1.25rem; line-height:1; }
+  .editor-cancel:hover { border-color:var(--accent); color:var(--accent); background:var(--surface-tint); }
   .standalone-toggle { flex-direction:row; align-items:center; gap:8px; font-weight:500; }
   .standalone-toggle input { width:auto; accent-color:var(--accent); }
   .standalone-note { margin:-4px 0; color:var(--ink-soft); font-size:.82rem; }
-  @media (max-width:700px) { .editor-heading { flex-direction:column; } .form-grid { grid-template-columns:1fr; } }
+  @media (max-width:700px) { .editor-heading { flex-direction:column; } .editor-actions { align-self:flex-end; } .form-grid { grid-template-columns:1fr; } }
 </style>

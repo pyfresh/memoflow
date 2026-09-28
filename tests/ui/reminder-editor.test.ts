@@ -18,7 +18,6 @@ describe('ReminderEditor', () => {
       reminderAt: '2026-10-05T09:00',
     }));
   });
-});
 
   it('provides rich-text toolbar actions for bold and list formatting', async () => {
     render(ReminderEditor, { onSave: vi.fn() });
@@ -32,3 +31,14 @@ describe('ReminderEditor', () => {
     expect(body.value).toContain('<ul><li>课程重点</li></ul>');
   });
 
+  it('uses the styled category menu and exposes a header close action', async () => {
+    render(ReminderEditor, { onSave: vi.fn() });
+
+    const category = screen.getByRole('combobox', { name: '分类' });
+    await fireEvent.click(category);
+    expect(screen.getByRole('option', { name: '课程' })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('option', { name: '课程' }));
+    expect(category).toHaveTextContent('课程');
+    expect(screen.getByRole('button', { name: '关闭编辑器' })).toBeInTheDocument();
+  });
+});

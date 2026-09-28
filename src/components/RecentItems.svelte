@@ -20,7 +20,7 @@
 <section class="panel recent-panel" aria-label="最近事项">
   <div class="panel-heading">
     <div>
-      <p class="panel-eyebrow">Next up</p>
+      <p class="panel-eyebrow">个人工作台</p>
       <h2>最近事项</h2>
     </div>
     <span class="item-count">{items.length}</span>

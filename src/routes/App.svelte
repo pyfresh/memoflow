@@ -4,6 +4,7 @@
   import MonthCalendar from '../components/MonthCalendar.svelte';
   import RecentItems from '../components/RecentItems.svelte';
   import ReminderEditor from '../components/ReminderEditor.svelte';
+  import SelectMenu from '../components/SelectMenu.svelte';
   import Sidebar from '../components/Sidebar.svelte';
   import type { CalendarItem, RecentItem } from '$lib/domain/types';
   import type { MemoDraft } from '$lib/data/repository';
@@ -21,6 +22,11 @@
   let currentMonth = new Date();
   let query = '';
   let categoryFilter = 'all';
+  const categoryOptions = [
+    { value: 'all', label: '全部分类' },
+    { value: 'course', label: '课程' },
+    { value: 'life', label: '生活' },
+  ];
   let showEditor = false;
   let showImporter = false;
   let editingDraft: Partial<MemoDraft> = {};
@@ -182,18 +188,13 @@
   <main class="workspace">
     <header class="workspace-header">
       <div>
-        <p class="workspace-kicker">个人工作台</p>
         <h1 class="workspace-title">今天要做什么？</h1>
         <p class="workspace-subtitle">让每个提醒都有一个清晰的下一步。</p>
       </div>
       <div class="header-tools">
         <input class="search-box" aria-label="搜索备忘录" placeholder="搜索备忘录…" bind:value={query} />
 
-<select class="filter-select" aria-label="筛选分类" bind:value={categoryFilter}>
-          <option value="all">全部分类</option>
-          <option value="course">课程</option>
-          <option value="life">生活</option>
-        </select>
+<SelectMenu label="筛选分类" bind:value={categoryFilter} options={categoryOptions} />
         <button class="primary-button" type="button" on:click={openNewMemo}>＋ 新建</button>
       </div>
     </header>
@@ -208,8 +209,7 @@
 {#if showEditor}
   <div class="overlay">
     <div class="modal" role="dialog" aria-modal="true" aria-label="编辑备忘录">
-      <ReminderEditor initial={editingDraft} on:save={saveMemo} />
-      <button class="close-button" type="button" aria-label="关闭编辑器" on:click={() => (showEditor = false)}>×</button>
+      <ReminderEditor initial={editingDraft} on:save={saveMemo} on:cancel={() => (showEditor = false)} />
     </div>
   </div>
 {/if}
