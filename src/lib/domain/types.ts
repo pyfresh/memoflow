@@ -14,6 +14,11 @@ export interface Memo {
   updatedAt: string;
 }
 
+export interface ReminderOccurrence {
+  at: string;
+  status: 'completed' | 'ignored';
+}
+
 export interface Reminder {
   id: string;
   memoId: string | null;
@@ -22,6 +27,8 @@ export interface Reminder {
   recurrenceRule: string | null;
   status: ReminderStatus;
   notificationSentAt: string | null;
+  recurrenceAnchorAt?: string;
+  occurrenceHistory?: ReminderOccurrence[];
   createdAt: string;
   updatedAt: string;
 }
@@ -49,3 +56,9 @@ export interface CalendarCell {
   isCurrentMonth: boolean;
   isToday: boolean;
 }
+
+export interface CalendarItem { id: string; date: string; title: string; kind: 'course' | 'reminder' | 'note'; time?: string; }
+export interface RecentItem {
+  searchText?: string; id: string; memoId: string; title: string; dueAt: string | null; source: 'manual' | 'blackboard'; status: ReminderStatus; category: string; }
+
+

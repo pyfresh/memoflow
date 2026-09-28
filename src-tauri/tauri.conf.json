@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tauri-app",
+  "productName": "MemoFlow",
   "version": "0.1.0",
   "identifier": "com.pyfresh.memoflow",
   "build": {
@@ -12,9 +12,9 @@
   "app": {
     "windows": [
       {
-        "title": "tauri-app",
-        "width": 800,
-        "height": 600
+        "title": "MemoFlow",
+        "width": 1280,
+        "height": 820
       }
     ],
     "security": {
@@ -33,3 +33,4 @@
     ]
   }
 }
+

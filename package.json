@@ -1,7 +1,7 @@
 {
-  "name": "tauri-app",
+  "name": "memoflow",
   "version": "0.1.0",
-  "description": "",
+  "description": "轻量的个人备忘录与课程提醒",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
@@ -17,6 +17,7 @@
   "license": "MIT",
   "dependencies": {
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-notification": "^2.5.0",
     "@tauri-apps/plugin-opener": "^2"
   },
   "devDependencies": {
