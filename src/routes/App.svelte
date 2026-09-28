@@ -32,6 +32,7 @@
   ];
   let showEditor = false;
   let showImporter = false;
+  let seedMessage = '';
   let editingDraft: Partial<MemoDraft> = {};
   let editingId: string | null = null;
 
@@ -185,6 +186,15 @@
     void repository.flush();
   }
 
+  function seedDemoData() {
+    const result = repository.seedDemoData();
+    refresh();
+    seedMessage = result.addedMemos || result.addedReminders || result.addedBlackboardItems
+      ? `已加载 ${result.addedMemos} 条备忘录和 ${result.addedReminders} 条提醒`
+      : '示例数据已经存在';
+    void repository.flush();
+  }
+
   function exportData() {
     const blob = new Blob([exportMemosToMarkdown(snapshot)], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -234,9 +244,10 @@
 
 <div class="app-shell">
   <h1 class="sr-only">MemoFlow</h1>
-  <Sidebar activeView={activeView} on:navigate={navigate} on:importBlackboard={handleImport} on:exportData={exportData} on:exportPlainText={exportPlainText} />
+  <Sidebar activeView={activeView} on:navigate={navigate} on:importBlackboard={handleImport} on:seedDemoData={seedDemoData} on:exportData={exportData} on:exportPlainText={exportPlainText} />
 
   <main class="workspace">
+    {#if seedMessage}<p class="seed-feedback" role="status" aria-live="polite">{seedMessage}</p>{/if}
     {#if activeView === 'overview'}
       <header class="workspace-header">
         <div>
@@ -308,4 +319,5 @@
 <style>
   .page-header { margin-bottom:28px; }
   .single-panel { max-width:820px; }
+  .seed-feedback { margin:0 0 16px; color:var(--accent-strong); font-size:.78rem; font-weight:650; }
 </style>

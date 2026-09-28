@@ -61,4 +61,12 @@ describe('MemoFlow dashboard', () => {
     expect(screen.getByRole('button', { name: /导出 Markdown/ })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: '搜索备忘录' })).toBeInTheDocument();
   });
+
+  it('loads virtual demo data from the sidebar', async () => {
+    render(App);
+    await fireEvent.click(screen.getByRole('button', { name: /加载示例数据/ }));
+
+    await waitFor(() => expect(screen.getByText('线性代数项目规划')).toBeInTheDocument());
+    expect(screen.getByText(/已加载 4 条备忘录和 6 条提醒/)).toBeInTheDocument();
+  });
 });

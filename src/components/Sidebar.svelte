@@ -7,6 +7,7 @@
   const dispatch = createEventDispatcher<{
     navigate: View;
     importBlackboard: void;
+    seedDemoData: void;
     exportData: void;
     exportPlainText: void;
   }>();
@@ -36,6 +37,7 @@
 
   <div class="sidebar-bottom">
     <button class="sidebar-action" type="button" on:click={() => dispatch('importBlackboard')}>⌁　同步 Blackboard</button>
+    <button class="sidebar-action" type="button" on:click={() => dispatch('seedDemoData')}>✦　加载示例数据</button>
     <button class="sidebar-action" type="button" on:click={() => dispatch('exportData')}>↓　导出 Markdown</button>
     <button class="sidebar-action" type="button" on:click={() => dispatch('exportPlainText')}>↓　导出纯文本</button>
     <p class="sidebar-footnote">数据保存在本机</p>

@@ -30,6 +30,7 @@ export interface ReminderDraft {
 }
 export interface SavedMemo extends Memo { reminderId: string | null; }
 export interface ImportResult { newCount: number; updatedCount: number; existingCount: number; errorCount: number; }
+export interface DemoSeedResult { addedMemos: number; addedReminders: number; addedBlackboardItems: number; }
 export interface PersistenceDriver { load(): Promise<AppSnapshot>; save(snapshot: AppSnapshot): Promise<void>; }
 
 export class RepositoryCorruptionError extends Error {
@@ -41,6 +42,13 @@ function createId(prefix: string): string {
   return `${prefix}_${uuid}`;
 }
 function nowIso(): string { return new Date().toISOString(); }
+function demoDueAt(referenceDate: Date, day: number, hour: string): string {
+  const year = referenceDate.getFullYear();
+  const month = referenceDate.getMonth();
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const date = `${year}-${String(month + 1).padStart(2, '0')}-${String(Math.min(day, lastDay)).padStart(2, '0')}`;
+  return `${date}T${hour}:00+08:00`;
+}
 
 export function normalizeLocalDateTime(value: string): string {
   if (!value) return '';
@@ -191,6 +199,50 @@ export class LocalRepository {
       }
     }
     const finishedAt = nowIso(); (snapshot.syncRuns ??= []).unshift({ id: createId('sync'), startedAt, finishedAt, status: result.errorCount ? 'completed-with-errors' : 'completed', ...result }); this.write(snapshot); return result;
+  }
+
+  seedDemoData(referenceDate = new Date()): DemoSeedResult {
+    const snapshot = this.load();
+    const timestamp = nowIso();
+    const memoDefinitions: Memo[] = [
+      { id: 'demo-memo-course', title: '线性代数项目规划', richText: '<p>整理项目分工，完成第一次讨论。</p>', categoryId: 'course', tags: ['课程', '项目'], source: 'manual', externalItemId: null, sourceUrl: null, createdAt: timestamp, updatedAt: timestamp },
+      { id: 'demo-memo-life', title: '周末采购清单', richText: '<p>咖啡豆、洗衣液和水果。</p>', categoryId: 'life', tags: ['生活'], source: 'manual', externalItemId: null, sourceUrl: null, createdAt: timestamp, updatedAt: timestamp },
+      { id: 'demo-memo-inbox', title: '待整理：阅读笔记', richText: '<p>把本周读到的文章整理成卡片。</p>', categoryId: 'inbox', tags: ['待整理'], source: 'manual', externalItemId: null, sourceUrl: null, createdAt: timestamp, updatedAt: timestamp },
+      { id: 'demo-memo-blackboard', title: '数据结构作业提交', richText: remoteMemoBody('数据结构', 'assignment', 'https://bb.cuhk.edu.cn/ultra/courses/demo/outline'), categoryId: 'course', tags: ['assignment', 'COMP'], source: 'blackboard', externalItemId: 'demo-bb-assignment', sourceUrl: 'https://bb.cuhk.edu.cn/ultra/courses/demo/outline', createdAt: timestamp, updatedAt: timestamp },
+    ];
+    const reminderDefinitions: Reminder[] = [
+      { id: 'demo-reminder-course', memoId: 'demo-memo-course', title: '线性代数项目规划', dueAt: demoDueAt(referenceDate, 3, '09:00'), recurrenceRule: null, status: 'pending', notificationSentAt: null, recurrenceAnchorAt: demoDueAt(referenceDate, 3, '09:00'), occurrenceHistory: [], createdAt: timestamp, updatedAt: timestamp },
+      { id: 'demo-reminder-life', memoId: 'demo-memo-life', title: '周末采购清单', dueAt: demoDueAt(referenceDate, 8, '18:30'), recurrenceRule: null, status: 'pending', notificationSentAt: null, recurrenceAnchorAt: demoDueAt(referenceDate, 8, '18:30'), occurrenceHistory: [], createdAt: timestamp, updatedAt: timestamp },
+      { id: 'demo-reminder-inbox', memoId: 'demo-memo-inbox', title: '待整理：阅读笔记', dueAt: demoDueAt(referenceDate, 15, '20:00'), recurrenceRule: null, status: 'pending', notificationSentAt: null, recurrenceAnchorAt: demoDueAt(referenceDate, 15, '20:00'), occurrenceHistory: [], createdAt: timestamp, updatedAt: timestamp },
+      { id: 'demo-reminder-blackboard', memoId: 'demo-memo-blackboard', title: '数据结构作业提交', dueAt: demoDueAt(referenceDate, 20, '23:59'), recurrenceRule: null, status: 'pending', notificationSentAt: null, recurrenceAnchorAt: demoDueAt(referenceDate, 20, '23:59'), occurrenceHistory: [], createdAt: timestamp, updatedAt: timestamp },
+      { id: 'demo-reminder-standalone', memoId: null, title: '给导师发周报', dueAt: demoDueAt(referenceDate, 10, '10:00'), recurrenceRule: null, status: 'pending', notificationSentAt: null, recurrenceAnchorAt: demoDueAt(referenceDate, 10, '10:00'), occurrenceHistory: [], createdAt: timestamp, updatedAt: timestamp },
+      { id: 'demo-reminder-completed', memoId: null, title: '提交社团报名表', dueAt: demoDueAt(referenceDate, 25, '16:00'), recurrenceRule: null, status: 'completed', notificationSentAt: timestamp, recurrenceAnchorAt: demoDueAt(referenceDate, 25, '16:00'), occurrenceHistory: [], createdAt: timestamp, updatedAt: timestamp },
+    ];
+    let addedMemos = 0;
+    for (const memo of memoDefinitions) {
+      if (snapshot.memos.some((item) => item.id === memo.id)) continue;
+      snapshot.memos.push(memo);
+      addedMemos += 1;
+    }
+    let addedReminders = 0;
+    for (const reminder of reminderDefinitions) {
+      if (snapshot.reminders.some((item) => item.id === reminder.id)) continue;
+      snapshot.reminders.push(reminder);
+      addedReminders += 1;
+    }
+    const blackboardItem: BlackboardItem = {
+      id: 'demo-bb-assignment', externalId: 'demo-bb-assignment', courseName: '数据结构', courseCode: 'COMP 2411', title: '数据结构作业提交', itemType: 'assignment',
+      dueAt: demoDueAt(referenceDate, 20, '23:59'), sourceUrl: 'https://bb.cuhk.edu.cn/ultra/courses/demo/outline', lastSeenAt: timestamp, syncStatus: 'new',
+    };
+    let addedBlackboardItems = 0;
+    if (!snapshot.blackboardItems.some((item) => item.id === blackboardItem.id || item.externalId === blackboardItem.externalId)) {
+      snapshot.blackboardItems.push(blackboardItem);
+      snapshot.externalMappings ??= [];
+      snapshot.externalMappings.push({ key: 'id:demo-bb-assignment', externalId: 'demo-bb-assignment', memoId: 'demo-memo-blackboard', reminderId: 'demo-reminder-blackboard', sourceUrl: blackboardItem.sourceUrl, updatedAt: timestamp });
+      addedBlackboardItems = 1;
+    }
+    this.write(snapshot);
+    return { addedMemos, addedReminders, addedBlackboardItems };
   }
   listReminders(): Reminder[] { return this.load().reminders; }
   markNotificationSent(id: string, sentAt: string): void { const snapshot = this.load(); const reminder = snapshot.reminders.find((item) => item.id === id); if (!reminder) return; reminder.notificationSentAt = sentAt; reminder.updatedAt = sentAt; this.write(snapshot); }
