@@ -3,6 +3,9 @@
   import type { RecentItem } from '$lib/domain/types';
   export let items: RecentItem[] = [];
   export let query = '';
+  export let title = '最近事项';
+  export let eyebrow = '个人工作台';
+  export let emptyMessage = '还没有事项，先创建一条备忘录吧。';
 
   const dispatch = createEventDispatcher<{ select: RecentItem; status: { item: RecentItem; status: 'completed' | 'ignored' } }>();
 
@@ -20,8 +23,8 @@
 <section class="panel recent-panel" aria-label="最近事项">
   <div class="panel-heading">
     <div>
-      <p class="panel-eyebrow">个人工作台</p>
-      <h2>最近事项</h2>
+      <p class="panel-eyebrow">{eyebrow}</p>
+      <h2>{title}</h2>
     </div>
     <span class="item-count">{items.length}</span>
   </div>
@@ -29,7 +32,7 @@
   {#if items.length === 0}
     <div class="empty-state">
       <span class="empty-mark">○</span>
-      <p>{query ? '没有匹配的事项。' : '还没有事项，先创建一条备忘录吧。'}</p>
+      <p>{query ? '没有匹配的事项。' : emptyMessage}</p>
     </div>
   {:else}
     <div class="recent-list">

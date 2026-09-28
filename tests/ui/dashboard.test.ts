@@ -9,7 +9,7 @@ describe('MemoFlow dashboard', () => {
 
   it('opens the memo editor and shows a saved reminder in recent items', async () => {
     render(App);
-    await fireEvent.click(screen.getByRole('button', { name: '＋ 新建' }));
+    await fireEvent.click(screen.getByRole('button', { name: '＋ 新建备忘录' }));
 
     await fireEvent.input(screen.getByLabelText('标题'), { target: { value: '准备课程资料' } });
     await fireEvent.input(screen.getByLabelText('正文'), { target: { value: '整理本周课程文件' } });
@@ -22,7 +22,7 @@ describe('MemoFlow dashboard', () => {
 
   it('creates a standalone reminder without adding a memo', async () => {
     render(App);
-    await fireEvent.click(screen.getByRole('button', { name: '新建提醒' }));
+    await fireEvent.click(screen.getByRole('button', { name: '＋ 新建提醒' }));
     await fireEvent.input(screen.getByLabelText('标题'), { target: { value: '打电话' } });
     await fireEvent.input(screen.getByLabelText('提醒时间'), { target: { value: '2026-10-05T09:00' } });
     await fireEvent.click(screen.getByRole('button', { name: '保存提醒' }));
@@ -32,6 +32,29 @@ describe('MemoFlow dashboard', () => {
     expect(snapshot.reminders).toHaveLength(1);
   });
 
+  it('navigates between overview, memo and reminder pages', async () => {
+    render(App);
+    await fireEvent.click(screen.getByRole('button', { name: '备忘录' }));
+    expect(screen.getByRole('heading', { name: '备忘录' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '＋ 新建备忘录' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: '月历' })).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: '提醒' }));
+    expect(screen.getByRole('heading', { name: '提醒' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '＋ 新建提醒' })).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: '快速一览' }));
+    expect(screen.getByRole('region', { name: '月历' })).toBeInTheDocument();
+  });
+
+  it('closes the editor by clicking the surrounding overlay', async () => {
+    render(App);
+    await fireEvent.click(screen.getByRole('button', { name: '＋ 新建备忘录' }));
+    expect(screen.getByRole('dialog', { name: '编辑备忘录' })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('presentation'));
+    expect(screen.queryByRole('dialog', { name: '编辑备忘录' })).not.toBeInTheDocument();
+  });
+
   it('exposes Blackboard sync, export and search controls', () => {
     render(App);
     expect(screen.getByRole('button', { name: /同步 Blackboard/ })).toBeInTheDocument();
@@ -39,6 +62,3 @@ describe('MemoFlow dashboard', () => {
     expect(screen.getByRole('textbox', { name: '搜索备忘录' })).toBeInTheDocument();
   });
 });
-
-
-

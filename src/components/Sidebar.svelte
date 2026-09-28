@@ -1,23 +1,32 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import type { View } from '$lib/domain/navigation';
+
+  export let activeView: View = 'overview';
 
   const dispatch = createEventDispatcher<{
-    newMemo: void;
-    newReminder: void;
+    navigate: View;
     importBlackboard: void;
     exportData: void;
     exportPlainText: void;
   }>();
+
+  const views: Array<{ id: View; icon: string; label: string }> = [
+    { id: 'overview', icon: '▦', label: '快速一览' },
+    { id: 'memos', icon: '▤', label: '备忘录' },
+    { id: 'reminders', icon: '◷', label: '提醒' },
+  ];
 </script>
 
 <aside class="app-sidebar">
   <div class="brand"><span class="brand-mark">M</span><span>MemoFlow</span></div>
 
   <nav class="nav-group" aria-label="主导航">
-    <button class="nav-button active" type="button"><span class="nav-icon">▦</span><span>我的备忘录</span></button>
-    <button class="nav-button" type="button" on:click={() => dispatch('newMemo')}><span class="nav-icon">＋</span><span>新建备忘录</span></button>
-    <button class="nav-button" type="button" aria-label="新建提醒" on:click={() => dispatch('newReminder')}><span class="nav-icon" aria-hidden="true">◷</span><span>新建提醒</span></button>
-    <button class="nav-button" type="button" on:click={() => dispatch('importBlackboard')}><span class="nav-icon">⌁</span><span>Blackboard</span></button>
+    {#each views as view}
+      <button class:active={activeView === view.id} class="nav-button" type="button" aria-current={activeView === view.id ? 'page' : undefined} on:click={() => dispatch('navigate', view.id)}>
+        <span class="nav-icon" aria-hidden="true">{view.icon}</span><span>{view.label}</span>
+      </button>
+    {/each}
   </nav>
 
   <p class="sidebar-label">分类</p>

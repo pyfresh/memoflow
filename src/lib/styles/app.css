@@ -47,3 +47,6 @@
 @media (max-width:900px) { .workspace-header { align-items:flex-start; flex-direction:column; } .header-tools { width:100%; flex-wrap:wrap; } .search-box { flex:1; min-width:200px; } .dashboard { grid-template-columns:1fr; } .recent-panel { order:2; } }
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 .filter-select { border:1px solid var(--line); border-radius:8px; padding:10px 12px; background:var(--surface); color:var(--ink-soft); box-shadow:var(--shadow-sm); }
+.secondary-action { border:1px solid var(--line); border-radius:8px; padding:10px 13px; background:var(--surface); color:var(--accent-strong); font-weight:750; box-shadow:var(--shadow-sm); transition:border-color .18s ease, background .18s ease; }
+.secondary-action:hover { border-color:var(--accent); background:var(--accent-soft); }
+.header-tools > .select-menu { width:140px; flex:0 0 140px; }
