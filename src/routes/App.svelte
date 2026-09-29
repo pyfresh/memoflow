@@ -5,13 +5,14 @@
   import MonthCalendar from '../components/MonthCalendar.svelte';
   import RecentItems from '../components/RecentItems.svelte';
   import ReminderEditor from '../components/ReminderEditor.svelte';
-  import SelectMenu from '../components/SelectMenu.svelte';
   import Sidebar from '../components/Sidebar.svelte';
+  import WeeklySchedule from '../components/WeeklySchedule.svelte';
   import type { View } from '$lib/domain/navigation';
-  import type { CalendarItem, Memo, RecentItem } from '$lib/domain/types';
+  import type { BlackboardCapturePayload, CalendarItem, Memo, RecentItem } from '$lib/domain/types';
   import type { MemoDraft } from '$lib/data/repository';
   import { createBrowserRepository, type AppSnapshot } from '$lib/data/repository';
   import { getReminderOccurrences } from '$lib/domain/reminders';
+  import { startOfWeek } from '$lib/domain/schedule';
   import { startReminderScheduler } from '$lib/reminders/scheduler';
   import { notifyReminder } from '$lib/notifications';
   import { createDesktopPersistenceDriver } from '$lib/data/desktop';
@@ -21,15 +22,9 @@
   const repository = createBrowserRepository(desktopPersistence);
   let snapshot: AppSnapshot = repository.load();
   let currentMonth = new Date();
+  let currentWeek = startOfWeek(new Date());
   let activeView: View = 'overview';
   let query = '';
-  let categoryFilter = 'all';
-  const categoryOptions = [
-    { value: 'all', label: '全部分类' },
-    { value: 'course', label: '课程' },
-    { value: 'life', label: '生活' },
-    { value: 'inbox', label: '待整理' },
-  ];
   let showEditor = false;
   let showImporter = false;
   let seedMessage = '';
@@ -75,16 +70,14 @@
   $: filteredReminderItems = allReminderItems.filter((item) => {
     const normalizedQuery = query.trim().toLowerCase();
     const matchesQuery = !normalizedQuery || item.title.toLowerCase().includes(normalizedQuery) || (item.searchText ?? '').toLowerCase().includes(normalizedQuery);
-    const matchesCategory = categoryFilter === 'all' || item.category === ({ course: '课程', life: '生活', inbox: '待整理' }[categoryFilter] ?? categoryFilter);
-    return matchesQuery && matchesCategory;
+    return matchesQuery;
   });
   $: recentItems = filteredReminderItems.slice(0, 7);
   $: memoItems = snapshot.memos
     .filter((memo) => {
       const normalizedQuery = query.trim().toLowerCase();
       const matchesQuery = !normalizedQuery || [memo.title, memo.richText, memo.tags.join(' ')].join(' ').toLowerCase().includes(normalizedQuery);
-      const matchesCategory = categoryFilter === 'all' || memoCategory(memo) === ({ course: '课程', life: '生活', inbox: '待整理' }[categoryFilter] ?? categoryFilter);
-      return matchesQuery && matchesCategory;
+      return matchesQuery;
     })
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
@@ -92,8 +85,6 @@
     const [rangeStart, rangeEnd] = monthBounds(currentMonth);
     calendarItems = snapshot.reminders.flatMap((reminder): CalendarItem[] => {
       const memo = snapshot.memos.find((item) => item.id === reminder.memoId);
-      const selectedCategory = ({ course: '课程', life: '生活', inbox: '待整理' }[categoryFilter] ?? categoryFilter);
-      if (categoryFilter !== 'all' && memoCategory(memo) !== selectedCategory) return [];
       return getReminderOccurrences(reminder, rangeStart, rangeEnd).map((occurrence) => ({
         id: reminder.id,
         date: occurrence.slice(0, 10),
@@ -110,12 +101,6 @@
 
   function navigate(event: CustomEvent<View>) {
     activeView = event.detail;
-    query = '';
-    categoryFilter = 'all';
-  }
-
-  function filterCategory(event: CustomEvent<string>) {
-    categoryFilter = event.detail;
     query = '';
   }
 
@@ -186,8 +171,9 @@
     showImporter = true;
   }
 
-  function confirmImport(event: CustomEvent<import('$lib/domain/types').ImportCandidate[]>) {
-    repository.importBlackboardItems(event.detail);
+  function confirmImport(event: CustomEvent<BlackboardCapturePayload>) {
+    repository.importBlackboardItems(event.detail.items);
+    repository.importBlackboardSchedules(event.detail.schedules);
     showImporter = false;
     refresh();
     void repository.flush();
@@ -251,7 +237,7 @@
 
 <div class="app-shell">
   <h1 class="sr-only">MemoFlow</h1>
-  <Sidebar activeView={activeView} activeCategory={categoryFilter} on:navigate={navigate} on:filterCategory={filterCategory} on:importBlackboard={handleImport} on:seedDemoData={seedDemoData} on:exportData={exportData} on:exportPlainText={exportPlainText} />
+  <Sidebar activeView={activeView} on:navigate={navigate} on:importBlackboard={handleImport} on:seedDemoData={seedDemoData} on:exportData={exportData} on:exportPlainText={exportPlainText} />
 
   <main class="workspace">
     {#if seedMessage}<p class="seed-feedback" role="status" aria-live="polite">{seedMessage}</p>{/if}
@@ -263,7 +249,6 @@
         </div>
         <div class="header-tools">
           <input class="search-box" aria-label="搜索备忘录" placeholder="搜索备忘录…" bind:value={query} />
-          <SelectMenu label="筛选分类" bind:value={categoryFilter} options={categoryOptions} />
           <button class="secondary-action" type="button" on:click={openNewReminder}>＋ 新建提醒</button>
           <button class="primary-button" type="button" on:click={openNewMemo}>＋ 新建备忘录</button>
         </div>
@@ -273,6 +258,8 @@
         <RecentItems items={recentItems} {query} on:select={editItem} on:status={updateStatus} />
         <MonthCalendar month={currentMonth} items={calendarItems} on:monthChange={(event) => (currentMonth = event.detail)} on:select={selectCalendarItem} />
       </section>
+    {:else if activeView === 'schedule'}
+      <WeeklySchedule entries={snapshot.courseSchedules ?? []} weekStart={currentWeek} on:weekChange={(event) => (currentWeek = event.detail)} />
     {:else if activeView === 'memos'}
       <header class="workspace-header page-header">
         <div>
@@ -282,7 +269,6 @@
         </div>
         <div class="header-tools">
           <input class="search-box" aria-label="搜索备忘录" placeholder="搜索备忘录…" bind:value={query} />
-          <SelectMenu label="筛选分类" bind:value={categoryFilter} options={categoryOptions} />
           <button class="primary-button" type="button" on:click={openNewMemo}>＋ 新建备忘录</button>
         </div>
       </header>
@@ -296,7 +282,6 @@
         </div>
         <div class="header-tools">
           <input class="search-box" aria-label="搜索提醒" placeholder="搜索提醒…" bind:value={query} />
-          <SelectMenu label="筛选分类" bind:value={categoryFilter} options={categoryOptions} />
           <button class="primary-button" type="button" on:click={openNewReminder}>＋ 新建提醒</button>
         </div>
       </header>

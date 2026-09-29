@@ -108,7 +108,7 @@ fn validate_snapshot(snapshot: &Value) -> Result<(), DbError> {
     for (field, records) in object {
         if matches!(
             field.as_str(),
-            "memos" | "reminders" | "blackboardItems" | "syncRuns" | "externalMappings"
+            "memos" | "reminders" | "blackboardItems" | "courseSchedules" | "syncRuns" | "externalMappings"
         ) && !records.is_array()
         {
             return Err(DbError::InvalidSnapshot(format!(

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fixture from '../fixtures/blackboard-calendar.html?raw';
-import { parseBlackboardCalendarHtml } from '../../src/lib/import/blackboard';
+import scheduleFixture from '../fixtures/blackboard-schedule.html?raw';
+import { parseBlackboardCalendarHtml, parseBlackboardScheduleHtml } from '../../src/lib/import/blackboard';
 
 describe('parseBlackboardCalendarHtml', () => {
   it('extracts only deadline items and resolves source links', () => {
@@ -22,6 +23,21 @@ describe('parseBlackboardCalendarHtml', () => {
         itemType: 'exam',
         dueAt: '2026-10-12T18:00:00+08:00',
         sourceUrl: 'https://bb.cuhk.edu.cn/webapps/blackboard/content/item/202',
+      },
+    ]);
+  });
+
+  it('extracts recurring course meeting rows and skips incomplete rows', () => {
+    expect(parseBlackboardScheduleHtml(scheduleFixture, 'https://bb.cuhk.edu.cn/')).toEqual([
+      {
+        externalId: 'class-math',
+        courseName: 'MATH 101',
+        courseCode: 'MATH101',
+        weekday: 2,
+        startTime: '09:00',
+        endTime: '10:30',
+        location: 'YIA LT6',
+        sourceUrl: 'https://bb.cuhk.edu.cn/webapps/blackboard/courses/math',
       },
     ]);
   });

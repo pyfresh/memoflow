@@ -1,5 +1,6 @@
 import { parseLocalIso } from '../domain/reminders';
-import type { BlackboardItem, BlackboardItemType, ImportCandidate } from '../domain/types';
+import type { BlackboardItem, BlackboardItemType, ImportCandidate, ScheduleCandidate } from '../domain/types';
+import { parseScheduleTime } from '../domain/schedule';
 
 export interface RawBlackboardItem {
   externalId?: string | null; courseName?: string | null; courseCode?: string | null; title?: string | null;
@@ -26,6 +27,41 @@ function normalizeDueAt(value: string | null | undefined): string | null {
 }
 export function normalizeExternalItem(raw: RawBlackboardItem): BlackboardItem {
   return { externalId: raw.externalId?.trim() || null, courseName: raw.courseName?.trim() || '未命名课程', courseCode: raw.courseCode?.trim() || null, title: raw.title?.trim() || '未命名项目', itemType: normalizeType(raw.itemType), dueAt: normalizeDueAt(raw.dueAt), sourceUrl: raw.sourceUrl?.trim() || '' };
+}
+
+export interface RawScheduleEntry {
+  externalId?: string | null; courseName?: string | null; courseCode?: string | null;
+  weekday?: string | number | null; startTime?: string | null; endTime?: string | null;
+  location?: string | null; sourceUrl?: string | null;
+}
+
+const weekdayMap: Record<string, number> = {
+  '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7,
+  monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 7,
+  '周一': 1, '星期一': 1, '周二': 2, '星期二': 2, '周三': 3, '星期三': 3,
+  '周四': 4, '星期四': 4, '周五': 5, '星期五': 5, '周六': 6, '星期六': 6, '周日': 7, '星期日': 7,
+};
+
+function normalizeWeekday(value: string | number | null | undefined): number | null {
+  const key = String(value ?? '').trim().toLowerCase().replace(/^day\s*/, '');
+  return weekdayMap[key] ?? null;
+}
+
+export function normalizeScheduleEntry(raw: RawScheduleEntry): ScheduleCandidate | null {
+  const weekday = normalizeWeekday(raw.weekday);
+  const startTime = parseScheduleTime(raw.startTime);
+  const endTime = parseScheduleTime(raw.endTime);
+  if (!weekday || !startTime || !endTime || startTime >= endTime) return null;
+  return {
+    externalId: raw.externalId?.trim() || null,
+    courseName: raw.courseName?.trim() || '未命名课程',
+    courseCode: raw.courseCode?.trim() || null,
+    weekday,
+    startTime,
+    endTime,
+    location: raw.location?.trim() || null,
+    sourceUrl: raw.sourceUrl?.trim() || '',
+  };
 }
 export function stableImportKey(item: Pick<BlackboardItem, 'externalId' | 'sourceUrl' | 'courseName' | 'courseCode' | 'title' | 'itemType'>): string | null {
   if (item.externalId?.trim()) return `id:${item.externalId.trim()}`;

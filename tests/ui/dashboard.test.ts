@@ -47,6 +47,14 @@ describe('MemoFlow dashboard', () => {
     expect(screen.getByRole('region', { name: '月历' })).toBeInTheDocument();
   });
 
+  it('opens the weekly schedule and removes the category navigation', async () => {
+    render(App);
+    expect(screen.queryByText('分类')).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: '周课表' }));
+    expect(screen.getByRole('heading', { name: '周课表' })).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: '筛选分类' })).not.toBeInTheDocument();
+  });
+
   it('closes the editor by clicking the surrounding overlay', async () => {
     render(App);
     await fireEvent.click(screen.getByRole('button', { name: '＋ 新建备忘录' }));
@@ -70,12 +78,4 @@ describe('MemoFlow dashboard', () => {
     expect(screen.getByText(/已加载 4 条备忘录和 6 条提醒/)).toBeInTheDocument();
   });
 
-  it('filters the current view when a sidebar category is selected', async () => {
-    render(App);
-    await fireEvent.click(screen.getByRole('button', { name: /加载示例数据/ }));
-    await fireEvent.click(screen.getByRole('button', { name: '课程' }));
-
-    expect(screen.getByText('线性代数项目规划')).toBeInTheDocument();
-    expect(screen.queryByText('周末采购清单')).not.toBeInTheDocument();
-  });
 });

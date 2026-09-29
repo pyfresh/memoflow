@@ -28,6 +28,8 @@ struct CaptureEnvelope {
     nonce: String,
     source: String,
     rows: Vec<CaptureRow>,
+    #[serde(rename = "scheduleRows", default)]
+    schedule_rows: Vec<CaptureScheduleRow>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -47,11 +49,29 @@ struct CaptureRow {
     source_url: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct CaptureScheduleRow {
+    #[serde(rename = "externalId")]
+    external_id: Option<String>,
+    #[serde(rename = "courseName")]
+    course_name: String,
+    #[serde(rename = "courseCode")]
+    course_code: Option<String>,
+    weekday: u8,
+    #[serde(rename = "startTime")]
+    start_time: String,
+    #[serde(rename = "endTime")]
+    end_time: String,
+    location: Option<String>,
+    #[serde(rename = "sourceUrl")]
+    source_url: String,
+}
+
 #[tauri::command]
 fn load_snapshot(app: tauri::AppHandle) -> Result<Value, String> {
     let database = db::SnapshotDb::open(database_path(&app)?).map_err(|error| error.to_string())?;
     Ok(database.load_snapshot().map_err(|error| error.to_string())?.unwrap_or_else(|| serde_json::json!({
-        "memos": [], "reminders": [], "blackboardItems": [], "syncRuns": [], "externalMappings": []
+        "memos": [], "reminders": [], "blackboardItems": [], "courseSchedules": [], "syncRuns": [], "externalMappings": []
     })))
 }
 
@@ -107,13 +127,15 @@ fn open_blackboard_window(
         };
         if envelope.nonce != expected_nonce
             || envelope.rows.len() > MAX_CAPTURE_ITEMS
+            || envelope.schedule_rows.len() > MAX_CAPTURE_ITEMS
             || !(envelope.source == "https://bb.cuhk.edu.cn"
                 || envelope.source == "https://sts.cuhk.edu.cn")
         {
             return false;
         }
 
-        let _ = event_app.emit("blackboard-capture", envelope.rows.clone());
+        let payload = serde_json::json!({ "items": envelope.rows, "schedules": envelope.schedule_rows });
+        let _ = event_app.emit("blackboard-capture", payload);
         false
     })
     .build()
@@ -158,7 +180,31 @@ fn capture_blackboard_calendar(
             sourceUrl: href
           }};
         }}).filter(Boolean);
-        const envelope = {{ nonce: '{nonce}', source: location.origin, rows }};
+        const scheduleNodes = [...document.querySelectorAll('[data-course-schedule], [data-class-event], [data-weekday], [data-day-of-week], [data-start-time]')];
+        const readValue = (element, attributes, selectors) => {{
+          for (const attribute of attributes) {{ const value = element.getAttribute(attribute); if (value) return value; }}
+          for (const selector of selectors) {{ const value = (element.querySelector(selector)?.textContent || '').replace(/\s+/g, ' ').trim(); if (value) return value; }}
+          return '';
+        }};
+        const weekdayMap = {{ 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6, 'sunday': 7, '周一': 1, '周二': 2, '周三': 3, '周四': 4, '周五': 5, '周六': 6, '周日': 7 }};
+        const parseWeekday = (value) => {{ const key = (value || '').trim().toLowerCase().replace(/^day\s*/, ''); return Number(key) || weekdayMap[key] || 0; }};
+        const parseTime = (value) => {{ const match = (value || '').trim().match(/^(\d{{1,2}}):(\d{{2}})/); if (!match) return ''; const hour = Number(match[1]); const minute = Number(match[2]); return hour < 24 && minute < 60 ? String(hour).padStart(2, '0') + ':' + match[2] : ''; }};
+        const scheduleRows = scheduleNodes.map((element) => {{
+          const weekday = parseWeekday(readValue(element, ['data-weekday', 'data-day-of-week', 'data-day'], ['[data-weekday]', '[data-day-of-week]', '.weekday', '.day']));
+          const startTime = parseTime(readValue(element, ['data-start-time', 'data-start'], ['[data-start-time]', 'time[data-start]']));
+          const endTime = parseTime(readValue(element, ['data-end-time', 'data-end'], ['[data-end-time]', 'time[data-end]']));
+          if (!weekday || !startTime || !endTime || startTime >= endTime) return null;
+          const href = element.querySelector('a[href]')?.href || location.href;
+          return {{
+            externalId: element.getAttribute('data-item-id') || element.getAttribute('data-id') || element.id || null,
+            courseName: element.getAttribute('data-course-name') || (element.querySelector('[data-course-name], .course-name, .course')?.textContent || '').replace(/\s+/g, ' ').trim() || '未命名课程',
+            courseCode: element.getAttribute('data-course-code') || null,
+            weekday, startTime, endTime,
+            location: element.getAttribute('data-location') || (element.querySelector('[data-location], .location, .room')?.textContent || '').replace(/\s+/g, ' ').trim() || null,
+            sourceUrl: href,
+          }};
+        }}).filter(Boolean);
+        const envelope = {{ nonce: '{nonce}', source: location.origin, rows, scheduleRows }};
         location.href = 'memoflow://capture?nonce={nonce}&payload=' + encodeURIComponent(JSON.stringify(envelope));
       }})();
     "#

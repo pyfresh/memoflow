@@ -125,4 +125,20 @@ describe('LocalRepository', () => {
     expect(repository.load().memos).toHaveLength(4);
     expect(repository.load().reminders).toHaveLength(6);
   });
+
+  it('imports recurring Blackboard course schedules idempotently', () => {
+    const first = repository.importBlackboardSchedules([{
+      externalId: 'class-1', courseName: 'MATH 101', courseCode: 'MATH101', weekday: 2,
+      startTime: '09:00', endTime: '10:30', location: 'YIA LT6', sourceUrl: 'https://bb/course/1',
+    }]);
+    const second = repository.importBlackboardSchedules([{
+      externalId: 'class-1', courseName: 'MATH 101', courseCode: 'MATH101', weekday: 2,
+      startTime: '09:00', endTime: '10:30', location: 'YIA LT6', sourceUrl: 'https://bb/course/1',
+    }]);
+
+    expect(first).toEqual({ newCount: 1, updatedCount: 0, existingCount: 0 });
+    expect(second).toEqual({ newCount: 0, updatedCount: 0, existingCount: 1 });
+    expect(repository.load().courseSchedules).toHaveLength(1);
+    expect(repository.load().courseSchedules?.[0]).toMatchObject({ weekday: 2, startTime: '09:00', endTime: '10:30', location: 'YIA LT6', source: 'blackboard' });
+  });
 });

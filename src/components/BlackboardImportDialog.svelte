@@ -3,15 +3,16 @@
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import { createEventDispatcher } from 'svelte';
-  import type { ImportCandidate } from '$lib/domain/types';
+  import type { BlackboardCapturePayload, ImportCandidate, ScheduleCandidate } from '$lib/domain/types';
   import { normalizeExternalItem } from '$lib/import/normalize';
 
   type Stage = 'start' | 'login' | 'preview' | 'done';
-  export let onConfirm: (items: ImportCandidate[]) => void = () => {};
+  export let onConfirm: (payload: BlackboardCapturePayload) => void = () => {};
 
-  const dispatch = createEventDispatcher<{ close: void }>();
+  const dispatch = createEventDispatcher<{ close: void; confirm: BlackboardCapturePayload }>();
   let stage: Stage = 'start';
   let candidates: ImportCandidate[] = [];
+  let schedules: ScheduleCandidate[] = [];
   let selected = new Set<string>();
   let errorMessage = '';
 
@@ -43,18 +44,20 @@
   onMount(() => {
     if (!isTauri()) return;
     let stop: (() => void) | undefined;
-    listen<ImportCandidate[]>('blackboard-capture', (event) => {
+    listen<ImportCandidate[] | BlackboardCapturePayload>('blackboard-capture', (event) => {
       try {
-        candidates = event.payload.map((item) => normalizeExternalItem(item));
-        if (candidates.length === 0) {
-          errorMessage = '当前页面没有识别到带截止时间的项目，请打开 Blackboard 总日历/活动页。';
+        const payload = Array.isArray(event.payload) ? { items: event.payload, schedules: [] } : event.payload;
+        candidates = payload.items.map((item) => normalizeExternalItem(item));
+        schedules = payload.schedules;
+        if (candidates.length === 0 && schedules.length === 0) {
+          errorMessage = '当前页面没有识别到作业或课程时段，请打开 Blackboard 总日历/课程日历。';
           return;
         }
         selected = new Set(candidates.map((item) => item.externalId ?? item.sourceUrl));
         stage = 'preview';
         errorMessage = '';
       } catch {
-        errorMessage = '读取 Blackboard 项目失败，请确认当前页面是总日历/活动页。';
+        errorMessage = '读取 Blackboard 数据失败，请确认当前页面是总日历或课程日历。';
       }
     }).then((unlisten) => {
       stop = unlisten;
@@ -104,7 +107,9 @@
   }
 
   function confirmImport() {
-    onConfirm(candidates.filter((item) => selected.has(item.externalId ?? item.sourceUrl)));
+    const payload = { items: candidates.filter((item) => selected.has(item.externalId ?? item.sourceUrl)), schedules };
+    onConfirm(payload);
+    dispatch('confirm', payload);
     stage = 'done';
   }
 </script>
@@ -138,7 +143,7 @@
       <button class="primary-button" type="button" on:click={readCalendar}>读取总日历</button>
     </div>
   {:else if stage === 'preview'}
-    <div class="preview-summary"><b>导入预览</b><span>{selected.size} 项将被导入</span></div>
+    <div class="preview-summary"><b>导入预览</b><span>{selected.size} 项目 · {schedules.length} 节课程</span></div>
     <div class="candidate-list">
       {#each candidates as candidate}
         {@const key = candidate.externalId ?? candidate.sourceUrl}
@@ -151,10 +156,10 @@
     </div>
     <div class="dialog-actions">
       <button class="secondary-button" type="button" on:click={() => (stage = 'login')}>返回</button>
-      <button class="primary-button" type="button" disabled={selected.size === 0} on:click={confirmImport}>确认导入</button>
+      <button class="primary-button" type="button" disabled={selected.size === 0 && schedules.length === 0} on:click={confirmImport}>确认导入</button>
     </div>
   {:else}
-    <div class="success-state"><span class="success-icon">✓</span><h3>导入完成</h3><p>项目已写入本地备忘录和提醒。</p><button class="primary-button" type="button" on:click={closeImporter}>返回日历</button></div>
+    <div class="success-state"><span class="success-icon">✓</span><h3>导入完成</h3><p>项目已写入备忘录和提醒，课程时段已更新到周课表。</p><button class="primary-button" type="button" on:click={closeImporter}>返回日历</button></div>
   {/if}
 </div>
 

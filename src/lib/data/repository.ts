@@ -1,5 +1,5 @@
 import { advanceReminderOccurrence, parseLocalIso } from '../domain/reminders';
-import type { BlackboardItem, ImportCandidate, Memo, Reminder, ReminderStatus } from '../domain/types';
+import type { BlackboardItem, CourseScheduleEntry, ImportCandidate, Memo, Reminder, ReminderStatus, ScheduleCandidate } from '../domain/types';
 
 export interface StorageLike {
   getItem(key: string): string | null;
@@ -17,6 +17,7 @@ export interface ExternalMapping {
 }
 export interface AppSnapshot {
   memos: Memo[]; reminders: Reminder[]; blackboardItems: BlackboardItem[];
+  courseSchedules?: CourseScheduleEntry[];
   syncRuns?: SyncRun[]; externalMappings?: ExternalMapping[];
 }
 export interface MemoDraft {
@@ -30,6 +31,7 @@ export interface ReminderDraft {
 }
 export interface SavedMemo extends Memo { reminderId: string | null; }
 export interface ImportResult { newCount: number; updatedCount: number; existingCount: number; errorCount: number; }
+export interface ScheduleImportResult { newCount: number; updatedCount: number; existingCount: number; }
 export interface DemoSeedResult { addedMemos: number; addedReminders: number; addedBlackboardItems: number; }
 export interface PersistenceDriver { load(): Promise<AppSnapshot>; save(snapshot: AppSnapshot): Promise<void>; }
 
@@ -58,7 +60,7 @@ export function normalizeLocalDateTime(value: string): string {
   parseLocalIso(local);
   return `${local}+08:00`;
 }
-function defaultSnapshot(): AppSnapshot { return { memos: [], reminders: [], blackboardItems: [], syncRuns: [], externalMappings: [] }; }
+function defaultSnapshot(): AppSnapshot { return { memos: [], reminders: [], blackboardItems: [], courseSchedules: [], syncRuns: [], externalMappings: [] }; }
 function requireString(value: unknown, path: string): string {
   if (typeof value !== 'string') throw new RepositoryCorruptionError(`Invalid snapshot field ${path}`);
   return value;
@@ -78,6 +80,7 @@ function validateSnapshot(input: unknown): AppSnapshot {
   }
   return {
     memos: parsed.memos as Memo[], reminders: parsed.reminders as Reminder[], blackboardItems: parsed.blackboardItems as BlackboardItem[],
+    courseSchedules: Array.isArray(parsed.courseSchedules) ? parsed.courseSchedules as CourseScheduleEntry[] : [],
     syncRuns: Array.isArray(parsed.syncRuns) ? parsed.syncRuns as SyncRun[] : [],
     externalMappings: Array.isArray(parsed.externalMappings) ? parsed.externalMappings as ExternalMapping[] : [],
   };
@@ -89,6 +92,10 @@ function stableExternalKey(item: Pick<BlackboardItem, 'externalId' | 'sourceUrl'
   const title = (item.title || '').trim().toLowerCase();
   if (!course || !title) return null;
   return `fallback:${course}|${item.itemType}|${title}`;
+}
+function stableScheduleKey(item: Pick<ScheduleCandidate, 'externalId' | 'courseName' | 'courseCode' | 'weekday' | 'startTime' | 'endTime'>): string {
+  if (item.externalId?.trim()) return `id:${item.externalId.trim()}`;
+  return `fallback:${(item.courseCode || item.courseName).trim().toLowerCase()}|${item.weekday}|${item.startTime}|${item.endTime}`;
 }
 function sameKey(a: BlackboardItem, b: BlackboardItem): boolean {
   const left = stableExternalKey(a); const right = stableExternalKey(b); return left !== null && left === right;
@@ -218,6 +225,10 @@ export class LocalRepository {
       { id: 'demo-reminder-standalone', memoId: null, title: '给导师发周报', dueAt: demoDueAt(referenceDate, 10, '10:00'), recurrenceRule: null, status: 'pending', notificationSentAt: null, recurrenceAnchorAt: demoDueAt(referenceDate, 10, '10:00'), occurrenceHistory: [], createdAt: timestamp, updatedAt: timestamp },
       { id: 'demo-reminder-completed', memoId: null, title: '提交社团报名表', dueAt: demoDueAt(referenceDate, 25, '16:00'), recurrenceRule: null, status: 'completed', notificationSentAt: timestamp, recurrenceAnchorAt: demoDueAt(referenceDate, 25, '16:00'), occurrenceHistory: [], createdAt: timestamp, updatedAt: timestamp },
     ];
+    const scheduleDefinitions: CourseScheduleEntry[] = [
+      { id: 'demo-schedule-math', courseName: 'MATH 101', courseCode: 'MATH101', weekday: 2, startTime: '09:00', endTime: '10:30', location: 'YIA LT6', source: 'blackboard', externalId: 'demo-class-math', sourceUrl: 'https://bb.cuhk.edu.cn/ultra/courses/demo/math', createdAt: timestamp, updatedAt: timestamp },
+      { id: 'demo-schedule-csc', courseName: 'CSC 201', courseCode: 'CSC201', weekday: 4, startTime: '14:30', endTime: '16:00', location: 'SHB 833', source: 'blackboard', externalId: 'demo-class-csc', sourceUrl: 'https://bb.cuhk.edu.cn/ultra/courses/demo/csc', createdAt: timestamp, updatedAt: timestamp },
+    ];
     let addedMemos = 0;
     for (const memo of memoDefinitions) {
       if (snapshot.memos.some((item) => item.id === memo.id)) continue;
@@ -229,6 +240,10 @@ export class LocalRepository {
       if (snapshot.reminders.some((item) => item.id === reminder.id)) continue;
       snapshot.reminders.push(reminder);
       addedReminders += 1;
+    }
+    snapshot.courseSchedules ??= [];
+    for (const schedule of scheduleDefinitions) {
+      if (!snapshot.courseSchedules.some((item) => item.id === schedule.id || stableScheduleKey(item) === stableScheduleKey(schedule))) snapshot.courseSchedules.push(schedule);
     }
     const blackboardItem: BlackboardItem = {
       id: 'demo-bb-assignment', externalId: 'demo-bb-assignment', courseName: '数据结构', courseCode: 'COMP 2411', title: '数据结构作业提交', itemType: 'assignment',
@@ -243,6 +258,29 @@ export class LocalRepository {
     }
     this.write(snapshot);
     return { addedMemos, addedReminders, addedBlackboardItems };
+  }
+
+  importBlackboardSchedules(candidates: ScheduleCandidate[]): ScheduleImportResult {
+    const snapshot = this.load();
+    snapshot.courseSchedules ??= [];
+    const result: ScheduleImportResult = { newCount: 0, updatedCount: 0, existingCount: 0 };
+    for (const candidate of candidates) {
+      const key = stableScheduleKey(candidate);
+      const existing = snapshot.courseSchedules.find((item) => stableScheduleKey(item) === key);
+      if (existing) {
+        const changed = existing.courseName !== candidate.courseName || existing.courseCode !== candidate.courseCode || existing.weekday !== candidate.weekday || existing.startTime !== candidate.startTime || existing.endTime !== candidate.endTime || existing.location !== candidate.location || existing.sourceUrl !== candidate.sourceUrl;
+        if (changed) {
+          Object.assign(existing, candidate, { updatedAt: nowIso() });
+          result.updatedCount += 1;
+        } else result.existingCount += 1;
+        continue;
+      }
+      const timestamp = nowIso();
+      snapshot.courseSchedules.push({ ...candidate, id: `schedule_${candidate.externalId ?? createId('course')}`, source: 'blackboard', createdAt: timestamp, updatedAt: timestamp });
+      result.newCount += 1;
+    }
+    this.write(snapshot);
+    return result;
   }
   listReminders(): Reminder[] { return this.load().reminders; }
   markNotificationSent(id: string, sentAt: string): void { const snapshot = this.load(); const reminder = snapshot.reminders.find((item) => item.id === id); if (!reminder) return; reminder.notificationSentAt = sentAt; reminder.updatedAt = sentAt; this.write(snapshot); }

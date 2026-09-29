@@ -1,5 +1,5 @@
-import type { BlackboardItem } from '../domain/types';
-import { dedupeImportCandidates, normalizeExternalItem } from './normalize';
+import type { BlackboardItem, ScheduleCandidate } from '../domain/types';
+import { dedupeImportCandidates, normalizeExternalItem, normalizeScheduleEntry } from './normalize';
 
 function text(value: string | null | undefined): string {
   return value?.replace(/\s+/g, ' ').trim() ?? '';
@@ -50,4 +50,44 @@ export function parseBlackboardCalendarHtml(html: string, baseUrl: string): Blac
   }
 
   return dedupeImportCandidates(candidates);
+}
+
+export function parseBlackboardScheduleHtml(html: string, baseUrl: string): ScheduleCandidate[] {
+  const document = new DOMParser().parseFromString(html, 'text/html');
+  const elements = Array.from(document.querySelectorAll<HTMLElement>(
+    '[data-course-schedule], [data-class-event], [data-weekday], [data-day-of-week], [data-start-time]',
+  ));
+  const schedules: ScheduleCandidate[] = [];
+  for (const element of elements) {
+    const attrOrText = (attributes: string[], selectors: string[]): string => {
+      for (const attribute of attributes) {
+        const value = element.getAttribute(attribute);
+        if (value) return value;
+      }
+      for (const selector of selectors) {
+        const value = text(element.querySelector(selector)?.textContent);
+        if (value) return value;
+      }
+      return '';
+    };
+    const href = element.querySelector<HTMLAnchorElement>('a[href]')?.getAttribute('href') ?? '';
+    const schedule = normalizeScheduleEntry({
+      externalId: element.getAttribute('data-item-id') ?? element.getAttribute('data-id') ?? element.id ?? null,
+      courseName: element.getAttribute('data-course-name') ?? text(element.querySelector('[data-course-name], .course-name, .course')?.textContent),
+      courseCode: element.getAttribute('data-course-code') ?? (text(element.querySelector('[data-course-code], .course-code')?.textContent) || null),
+      weekday: attrOrText(['data-weekday', 'data-day-of-week', 'data-day'], ['[data-weekday]', '[data-day-of-week]', '.weekday', '.day']),
+      startTime: attrOrText(['data-start-time', 'data-start'], ['[data-start-time]', 'time[data-start]']),
+      endTime: attrOrText(['data-end-time', 'data-end'], ['[data-end-time]', 'time[data-end]']),
+      location: element.getAttribute('data-location') ?? text(element.querySelector('[data-location], .location, .room')?.textContent),
+      sourceUrl: href ? new URL(href, baseUrl).href : baseUrl,
+    });
+    if (schedule) schedules.push(schedule);
+  }
+  const seen = new Set<string>();
+  return schedules.filter((schedule) => {
+    const key = schedule.externalId ?? `${schedule.courseCode ?? schedule.courseName}|${schedule.weekday}|${schedule.startTime}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

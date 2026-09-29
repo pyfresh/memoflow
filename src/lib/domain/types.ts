@@ -47,8 +47,39 @@ export interface BlackboardItem {
   syncStatus?: 'new' | 'updated' | 'existing' | 'not-found' | 'needs-review';
 }
 
+export interface CourseScheduleEntry {
+  id: string;
+  courseName: string;
+  courseCode: string | null;
+  weekday: number;
+  startTime: string;
+  endTime: string;
+  location: string | null;
+  source: 'blackboard';
+  externalId: string | null;
+  sourceUrl: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScheduleCandidate {
+  externalId: string | null;
+  courseName: string;
+  courseCode: string | null;
+  weekday: number;
+  startTime: string;
+  endTime: string;
+  location: string | null;
+  sourceUrl: string;
+}
+
 export interface ImportCandidate extends BlackboardItem {
   localMemoContent?: string;
+}
+
+export interface BlackboardCapturePayload {
+  items: ImportCandidate[];
+  schedules: ScheduleCandidate[];
 }
 
 export interface CalendarCell {

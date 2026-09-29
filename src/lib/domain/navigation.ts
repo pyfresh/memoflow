@@ -1,1 +1,1 @@
-export type View = 'overview' | 'memos' | 'reminders';
+export type View = 'overview' | 'memos' | 'reminders' | 'schedule';
