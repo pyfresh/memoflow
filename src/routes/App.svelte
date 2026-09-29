@@ -92,6 +92,8 @@
     const [rangeStart, rangeEnd] = monthBounds(currentMonth);
     calendarItems = snapshot.reminders.flatMap((reminder): CalendarItem[] => {
       const memo = snapshot.memos.find((item) => item.id === reminder.memoId);
+      const selectedCategory = ({ course: '课程', life: '生活', inbox: '待整理' }[categoryFilter] ?? categoryFilter);
+      if (categoryFilter !== 'all' && memoCategory(memo) !== selectedCategory) return [];
       return getReminderOccurrences(reminder, rangeStart, rangeEnd).map((occurrence) => ({
         id: reminder.id,
         date: occurrence.slice(0, 10),
@@ -110,6 +112,11 @@
     activeView = event.detail;
     query = '';
     categoryFilter = 'all';
+  }
+
+  function filterCategory(event: CustomEvent<string>) {
+    categoryFilter = event.detail;
+    query = '';
   }
 
   function openNewMemo() {
@@ -244,7 +251,7 @@
 
 <div class="app-shell">
   <h1 class="sr-only">MemoFlow</h1>
-  <Sidebar activeView={activeView} on:navigate={navigate} on:importBlackboard={handleImport} on:seedDemoData={seedDemoData} on:exportData={exportData} on:exportPlainText={exportPlainText} />
+  <Sidebar activeView={activeView} activeCategory={categoryFilter} on:navigate={navigate} on:filterCategory={filterCategory} on:importBlackboard={handleImport} on:seedDemoData={seedDemoData} on:exportData={exportData} on:exportPlainText={exportPlainText} />
 
   <main class="workspace">
     {#if seedMessage}<p class="seed-feedback" role="status" aria-live="polite">{seedMessage}</p>{/if}
