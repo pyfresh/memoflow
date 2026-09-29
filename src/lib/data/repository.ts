@@ -32,7 +32,7 @@ export interface ReminderDraft {
 export interface SavedMemo extends Memo { reminderId: string | null; }
 export interface ImportResult { newCount: number; updatedCount: number; existingCount: number; errorCount: number; }
 export interface ScheduleImportResult { newCount: number; updatedCount: number; existingCount: number; }
-export interface DemoSeedResult { addedMemos: number; addedReminders: number; addedBlackboardItems: number; }
+export interface DemoSeedResult { addedMemos: number; addedReminders: number; addedBlackboardItems: number; addedSchedules: number; }
 export interface PersistenceDriver { load(): Promise<AppSnapshot>; save(snapshot: AppSnapshot): Promise<void>; }
 
 export class RepositoryCorruptionError extends Error {
@@ -242,8 +242,12 @@ export class LocalRepository {
       addedReminders += 1;
     }
     snapshot.courseSchedules ??= [];
+    let addedSchedules = 0;
     for (const schedule of scheduleDefinitions) {
-      if (!snapshot.courseSchedules.some((item) => item.id === schedule.id || stableScheduleKey(item) === stableScheduleKey(schedule))) snapshot.courseSchedules.push(schedule);
+      if (!snapshot.courseSchedules.some((item) => item.id === schedule.id || stableScheduleKey(item) === stableScheduleKey(schedule))) {
+        snapshot.courseSchedules.push(schedule);
+        addedSchedules += 1;
+      }
     }
     const blackboardItem: BlackboardItem = {
       id: 'demo-bb-assignment', externalId: 'demo-bb-assignment', courseName: '数据结构', courseCode: 'COMP 2411', title: '数据结构作业提交', itemType: 'assignment',
@@ -257,7 +261,7 @@ export class LocalRepository {
       addedBlackboardItems = 1;
     }
     this.write(snapshot);
-    return { addedMemos, addedReminders, addedBlackboardItems };
+    return { addedMemos, addedReminders, addedBlackboardItems, addedSchedules };
   }
 
   importBlackboardSchedules(candidates: ScheduleCandidate[]): ScheduleImportResult {

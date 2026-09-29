@@ -75,7 +75,7 @@ describe('MemoFlow dashboard', () => {
     await fireEvent.click(screen.getByRole('button', { name: /加载示例数据/ }));
 
     await waitFor(() => expect(screen.getByText('线性代数项目规划')).toBeInTheDocument());
-    expect(screen.getByText(/已加载 4 条备忘录和 6 条提醒/)).toBeInTheDocument();
+    expect(screen.getByText(/已加载 4 条备忘录、6 条提醒和 2 节课程/)).toBeInTheDocument();
   });
 
 });

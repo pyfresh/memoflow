@@ -182,8 +182,8 @@
   function seedDemoData() {
     const result = repository.seedDemoData();
     refresh();
-    seedMessage = result.addedMemos || result.addedReminders || result.addedBlackboardItems
-      ? `已加载 ${result.addedMemos} 条备忘录和 ${result.addedReminders} 条提醒`
+    seedMessage = result.addedMemos || result.addedReminders || result.addedBlackboardItems || result.addedSchedules
+      ? `已加载 ${result.addedMemos} 条备忘录、${result.addedReminders} 条提醒和 ${result.addedSchedules} 节课程`
       : '示例数据已经存在';
     void repository.flush();
   }

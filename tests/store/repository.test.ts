@@ -114,14 +114,14 @@ describe('LocalRepository', () => {
     const first = repository.seedDemoData(new Date('2026-09-29T12:00:00+08:00'));
     const firstSnapshot = repository.load();
 
-    expect(first).toEqual({ addedMemos: 4, addedReminders: 6, addedBlackboardItems: 1 });
+    expect(first).toEqual({ addedMemos: 4, addedReminders: 6, addedBlackboardItems: 1, addedSchedules: 2 });
     expect(firstSnapshot.memos).toHaveLength(4);
     expect(firstSnapshot.reminders).toHaveLength(6);
     expect(firstSnapshot.blackboardItems).toHaveLength(1);
     expect(firstSnapshot.reminders.every((item) => item.dueAt.startsWith('2026-09-'))).toBe(true);
 
     const second = repository.seedDemoData(new Date('2026-09-29T12:00:00+08:00'));
-    expect(second).toEqual({ addedMemos: 0, addedReminders: 0, addedBlackboardItems: 0 });
+    expect(second).toEqual({ addedMemos: 0, addedReminders: 0, addedBlackboardItems: 0, addedSchedules: 0 });
     expect(repository.load().memos).toHaveLength(4);
     expect(repository.load().reminders).toHaveLength(6);
   });
