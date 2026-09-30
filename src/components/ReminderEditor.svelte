@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { createEventDispatcher } from 'svelte';
   import type { MemoDraft } from '$lib/data/repository';
   import SelectMenu from './SelectMenu.svelte';
@@ -19,23 +20,39 @@
   let categoryId = initial.categoryId ?? 'life';
   let tagsText = (initial.tags ?? []).join(', ');
   let standalone = initial.standalone ?? false;
+  let bodyEditor: HTMLDivElement;
+
+  onMount(() => {
+    if (bodyEditor) bodyEditor.innerHTML = body;
+  });
+
+  $: if (bodyEditor && bodyEditor.innerHTML !== body) bodyEditor.innerHTML = body;
+
+  function updateBody(event: Event) {
+    body = (event.currentTarget as HTMLDivElement).innerHTML;
+  }
+
+  function setBody(nextBody: string) {
+    body = nextBody;
+    if (bodyEditor && bodyEditor.innerHTML !== nextBody) bodyEditor.innerHTML = nextBody;
+  }
 
   function formatBold() {
     if (!body.trim()) return;
-    body = `<strong>${body.replace(/<[^>]+>/g, '')}</strong>`;
+    setBody(`<strong>${body.replace(/<[^>]+>/g, '')}</strong>`);
   }
 
   function formatList() {
     const text = body.replace(/<[^>]+>/g, '').trim();
     if (!text) return;
-    body = `<ul><li>${text}</li></ul>`;
+    setBody(`<ul><li>${text}</li></ul>`);
   }
 
   function insertLink() {
     const url = typeof window !== 'undefined' ? window.prompt('输入链接地址') : null;
     if (!url) return;
     const label = body.replace(/<[^>]+>/g, '').trim() || url;
-    body = `${body.replace(/<[^>]+>/g, '')}<p><a href="${url}" target="_blank" rel="noreferrer">${label}</a></p>`;
+    setBody(`${body.replace(/<[^>]+>/g, '')}<p><a href="${url}" target="_blank" rel="noreferrer">${label}</a></p>`);
   }
 
   function submit() {
@@ -79,7 +96,7 @@
         <button type="button" aria-label="项目列表" on:click={formatList}>☷</button>
         <button type="button" aria-label="插入链接" on:click={insertLink}>↗</button>
       </div>
-      <textarea id="memo-body" aria-label="正文" bind:value={body} rows="7" placeholder="写下详细内容、清单或链接"></textarea>
+      <div id="memo-body" bind:this={bodyEditor} class="body-editor" aria-label="正文" role="textbox" aria-multiline="true" contenteditable="true" data-placeholder="写下详细内容、清单或链接" on:input={updateBody}></div>
     </div>
 
     <div class="form-grid">
@@ -126,9 +143,13 @@
   h2 { margin:0; font-size:1.45rem; letter-spacing:-.035em; }
   label, .field-label { display:flex; flex-direction:column; gap:7px; color:var(--ink-soft); font-size:.8rem; font-weight:650; }
   .field { display:flex; flex-direction:column; gap:7px; }
-  input, textarea, select { box-sizing:border-box; width:100%; border:1px solid var(--line); border-radius:8px; padding:11px 12px; background:var(--surface); color:var(--ink); font:inherit; font-weight:400; outline:0; }
-  textarea { resize:vertical; line-height:1.6; }
-  input:focus, textarea:focus, select:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(7,143,131,.12); }
+  input, select, .body-editor { box-sizing:border-box; width:100%; border:1px solid var(--line); border-radius:8px; padding:11px 12px; background:var(--surface); color:var(--ink); font:inherit; font-weight:400; outline:0; }
+  .body-editor { min-height:150px; max-height:320px; overflow:auto; line-height:1.6; white-space:normal; }
+  .body-editor:empty::before { content:attr(data-placeholder); color:var(--ink-muted); pointer-events:none; }
+  .body-editor:focus, input:focus, select:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(7,143,131,.12); }
+  :global(.body-editor p) { margin:0 0 8px; }
+  :global(.body-editor p:last-child) { margin-bottom:0; }
+  :global(.body-editor ul), :global(.body-editor ol) { margin:0 0 8px 20px; padding:0; }
   .toolbar { display:flex; gap:5px; margin-bottom:-2px; }
   .toolbar button { width:30px; height:29px; border:1px solid var(--line); border-radius:7px; background:var(--surface-subtle); color:var(--ink-soft); }
   .toolbar button:hover { border-color:var(--accent); color:var(--accent); }

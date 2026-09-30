@@ -12,7 +12,9 @@ describe('MemoFlow dashboard', () => {
     await fireEvent.click(screen.getByRole('button', { name: '＋ 新建备忘录' }));
 
     await fireEvent.input(screen.getByLabelText('标题'), { target: { value: '准备课程资料' } });
-    await fireEvent.input(screen.getByLabelText('正文'), { target: { value: '整理本周课程文件' } });
+    const body = screen.getByLabelText('正文');
+    body.innerHTML = '整理本周课程文件';
+    await fireEvent.input(body);
     await fireEvent.input(screen.getByLabelText('提醒时间'), { target: { value: '2026-10-05T09:00' } });
     await fireEvent.click(screen.getByRole('button', { name: '保存备忘录' }));
 
