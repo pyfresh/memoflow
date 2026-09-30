@@ -2,7 +2,13 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": ["main", "blackboard"],
+  "remote": {
+    "urls": [
+      "https://bb.cuhk.edu.cn/**",
+      "https://sts.cuhk.edu.cn/**"
+    ]
+  },
   "permissions": [
     "core:default",
     "opener:default",

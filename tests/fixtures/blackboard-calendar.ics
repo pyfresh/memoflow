@@ -1,0 +1,35 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Blackboard//MemoFlow Test//EN
+X-WR-CALNAME:Institution
+BEGIN:VEVENT
+UID:assignment-1@bb.cuhk.edu.cn
+SUMMARY:Assignment 1
+DTEND;TZID=Asia/Hong_Kong:20261008T235900
+DESCRIPTION:Read chapters 1\, 2\n
+ and submit the report
+URL:https://bb.cuhk.edu.cn/ultra/courses/math/outline
+CATEGORIES:MATH 101,assignment
+END:VEVENT
+BEGIN:VEVENT
+UID:class-math-1@bb.cuhk.edu.cn
+SUMMARY:MATH 101 Lecture
+DTSTART;TZID=Asia/Hong_Kong:20261006T090000
+DTEND;TZID=Asia/Hong_Kong:20261006T103000
+RRULE:FREQ=WEEKLY;BYDAY=TU
+LOCATION:YIA LT6
+X-BB-CALENDAR-NAME:MATH 101
+URL:https://bb.cuhk.edu.cn/ultra/courses/math
+END:VEVENT
+BEGIN:VEVENT
+UID:personal-1@bb.cuhk.edu.cn
+SUMMARY:Personal appointment
+DTSTART:20261010T120000
+DTEND:20261010T130000
+CATEGORIES:Personal
+END:VEVENT
+BEGIN:VEVENT
+UID:missing-summary@bb.cuhk.edu.cn
+DTSTART:20261011T090000
+END:VEVENT
+END:VCALENDAR

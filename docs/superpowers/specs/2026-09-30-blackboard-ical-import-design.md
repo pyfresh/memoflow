@@ -16,7 +16,7 @@ MemoFlow 支持从 Blackboard 生成的私有 iCalendar Feed 导入当前勾选�
 
 ## 数据流与边界
 
-MemoFlow 前端把链接发送给 Tauri 命令。Rust 层只接受 `https://bb.cuhk.edu.cn/` 下的地址，并限制响应大小、响应状态和内容类型。请求通过已打开的 Blackboard WebView 会话执行，以兼容学校登录和私有 Feed。解析后的结构化数据通过现有 `blackboard-capture` 事件回传前端，不把原始 Feed 内容写入日志。
+MemoFlow 前端把链接发送给 Tauri 命令。Rust 层只接受 `https://bb.cuhk.edu.cn/` 下的地址，并限制响应大小、响应状态和内容类型。桌面版使用系统 HTTPS 客户端执行带超时的请求；Blackboard 的私有 token 已包含在用户复制的 Feed 地址中，不把登录 Cookie 或地址写入日志。解析后的结构化数据只在当前导入流程中使用，不把原始 Feed 内容写入日志。
 
 链接默认只用于当前导入，不保存到代码、仓库或远程服务。界面明确提示该地址带有私密令牌，用户不应分享。
 

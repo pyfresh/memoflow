@@ -5,6 +5,7 @@ import { parseScheduleTime } from '../domain/schedule';
 export interface RawBlackboardItem {
   externalId?: string | null; courseName?: string | null; courseCode?: string | null; title?: string | null;
   itemType?: string | null; dueAt?: string | null; sourceUrl?: string | null;
+  recurrenceRule?: string | null;
 }
 const typeMap: Record<string, BlackboardItemType> = {
   assignment: 'assignment', homework: 'assignment', project: 'project', exam: 'exam', test: 'exam', event: 'event', activity: 'event',
@@ -25,8 +26,15 @@ function normalizeDueAt(value: string | null | undefined): string | null {
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}:${values.second}+08:00`;
 }
+function normalizeRecurrenceRule(value: string | null | undefined): string | null {
+  const rule = value?.trim().toUpperCase();
+  if (!rule) return null;
+  const frequency = rule.match(/(?:^|;)FREQ=(DAILY|WEEKLY|MONTHLY)(?:;|$)/)?.[1];
+  return frequency ? `FREQ=${frequency}` : null;
+}
 export function normalizeExternalItem(raw: RawBlackboardItem): BlackboardItem {
-  return { externalId: raw.externalId?.trim() || null, courseName: raw.courseName?.trim() || '未命名课程', courseCode: raw.courseCode?.trim() || null, title: raw.title?.trim() || '未命名项目', itemType: normalizeType(raw.itemType), dueAt: normalizeDueAt(raw.dueAt), sourceUrl: raw.sourceUrl?.trim() || '' };
+  const recurrence = raw.recurrenceRule === undefined ? {} : { recurrenceRule: normalizeRecurrenceRule(raw.recurrenceRule) };
+  return { externalId: raw.externalId?.trim() || null, courseName: raw.courseName?.trim() || '未命名课程', courseCode: raw.courseCode?.trim() || null, title: raw.title?.trim() || '未命名项目', itemType: normalizeType(raw.itemType), dueAt: normalizeDueAt(raw.dueAt), sourceUrl: raw.sourceUrl?.trim() || '', ...recurrence };
 }
 
 export interface RawScheduleEntry {

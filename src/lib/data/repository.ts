@@ -100,21 +100,55 @@ function stableScheduleKey(item: Pick<ScheduleCandidate, 'externalId' | 'courseN
 function sameKey(a: BlackboardItem, b: BlackboardItem): boolean {
   const left = stableExternalKey(a); const right = stableExternalKey(b); return left !== null && left === right;
 }
-function remoteMemoBody(courseName: string, itemType: string, sourceUrl: string): string {
-  const href = sourceUrl ? `<a href="${sourceUrl}">打开 Blackboard 项目</a>` : '';
-  return `<p><strong>${courseName}</strong></p><p>${itemType}</p><p>${href}</p>`;
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character] ?? character));
+}
+function remoteMemoBody(courseName: string, itemType: string, sourceUrl: string, description?: string): string {
+  const href = sourceUrl ? `<a href="${escapeHtml(sourceUrl)}">打开 Blackboard 项目</a>` : '';
+  const body = description?.trim() ? `<p>${escapeHtml(description.trim()).replace(/\r?\n/g, '<br>')}</p>` : `<p>${escapeHtml(itemType)}</p>`;
+  return `<p><strong>${escapeHtml(courseName)}</strong></p>${body}<p>${href}</p>`;
+}
+function isLegacyBlackboardPlaceholder(item: BlackboardItem): boolean {
+  const sourceUrl = item.sourceUrl.trim().toLowerCase();
+  return /^\d{1,2}$/.test(item.title.trim())
+    && item.itemType === 'other'
+    && (item.courseName.trim() === '未命名课程' || item.courseName.trim() === 'Blackboard 课程')
+    && /^https:\/\/(?:bb|sts)\.cuhk\.edu\.cn(?:\/|$)/.test(sourceUrl);
+}
+function removeLegacyBlackboardPlaceholders(snapshot: AppSnapshot): boolean {
+  const legacyItems = snapshot.blackboardItems.filter(isLegacyBlackboardPlaceholder);
+  if (!legacyItems.length) return false;
+  const legacyKeys = new Set(legacyItems.flatMap((item) => [item.id, stableExternalKey(item)]).filter((key): key is string => Boolean(key)));
+  const mappings = snapshot.externalMappings ?? [];
+  const legacyMappings = mappings.filter((mapping) => legacyKeys.has(mapping.key) || (mapping.externalId ? legacyKeys.has(mapping.externalId) : false) || legacyItems.some((item) => item.sourceUrl.toLowerCase() === mapping.sourceUrl.toLowerCase()));
+  const memoIds = new Set(legacyMappings.map((mapping) => mapping.memoId).filter((id): id is string => Boolean(id)));
+  const reminderIds = new Set(legacyMappings.map((mapping) => mapping.reminderId).filter((id): id is string => Boolean(id)));
+  const legacyMemoIds = new Set(legacyItems.map((item) => item.id).filter((id): id is string => Boolean(id)));
+  snapshot.blackboardItems = snapshot.blackboardItems.filter((item) => !isLegacyBlackboardPlaceholder(item));
+  snapshot.externalMappings = mappings.filter((mapping) => !legacyMappings.includes(mapping));
+  snapshot.memos = snapshot.memos.filter((memo) => !memoIds.has(memo.id) && !legacyMemoIds.has(memo.id) && !(memo.source === 'blackboard' && legacyItems.some((item) => memo.title === item.title && (memo.sourceUrl ?? '').toLowerCase() === item.sourceUrl.toLowerCase())));
+  snapshot.reminders = snapshot.reminders.filter((reminder) => !reminderIds.has(reminder.id) && !memoIds.has(reminder.memoId ?? ''));
+  return true;
 }
 
 export class LocalRepository {
   constructor(private readonly storage: StorageLike, private readonly driver?: PersistenceDriver) {}
   load(): AppSnapshot {
     const raw = this.storage.getItem(STORAGE_KEY); if (!raw) return defaultSnapshot();
-    try { return validateSnapshot(JSON.parse(raw)); }
+    try {
+      const snapshot = validateSnapshot(JSON.parse(raw));
+      if (removeLegacyBlackboardPlaceholders(snapshot)) this.write(snapshot);
+      return snapshot;
+    }
     catch (error) { if (error instanceof RepositoryCorruptionError) throw error; throw new RepositoryCorruptionError(`Unable to parse snapshot: ${String(error)}`); }
   }
   async loadAsync(): Promise<AppSnapshot> {
     if (!this.driver) return this.load();
-    const snapshot = validateSnapshot(await this.driver.load()); this.write(snapshot); return snapshot;
+    const snapshot = validateSnapshot(await this.driver.load());
+    const migrated = removeLegacyBlackboardPlaceholders(snapshot);
+    this.write(snapshot);
+    if (migrated) await this.driver.save(snapshot);
+    return snapshot;
   }
   private write(snapshot: AppSnapshot): void { this.storage.setItem(STORAGE_KEY, JSON.stringify(snapshot)); }
   async flush(): Promise<void> { if (this.driver) await this.driver.save(this.load()); }
@@ -177,6 +211,7 @@ export class LocalRepository {
 
   importBlackboardItems(candidates: ImportCandidate[]): ImportResult {
     const snapshot = this.load(); snapshot.syncRuns ??= []; snapshot.externalMappings ??= []; const startedAt = nowIso(); const result: ImportResult = { newCount: 0, updatedCount: 0, existingCount: 0, errorCount: 0 };
+    removeLegacyBlackboardPlaceholders(snapshot);
     for (const candidate of candidates) {
       if (!candidate.dueAt) { result.errorCount += 1; continue; }
       try { parseLocalIso(candidate.dueAt); } catch { result.errorCount += 1; continue; }
@@ -184,18 +219,18 @@ export class LocalRepository {
       const mapping = (snapshot.externalMappings ?? []).find((item) => item.key === key || (item.sourceUrl && candidate.sourceUrl && item.sourceUrl.toLowerCase() === candidate.sourceUrl.toLowerCase()));
       const existing = mapping ? snapshot.blackboardItems.find((item) => item.id === mapping.externalId || sameKey(item, candidate)) : snapshot.blackboardItems.find((item) => sameKey(item, candidate));
       if (existing) {
-        const oldTitle = existing.title; const changed = oldTitle !== candidate.title || existing.dueAt !== candidate.dueAt;
-        Object.assign(existing, { externalId: candidate.externalId, courseName: candidate.courseName, courseCode: candidate.courseCode, title: candidate.title, itemType: candidate.itemType, dueAt: candidate.dueAt, sourceUrl: candidate.sourceUrl, lastSeenAt: nowIso(), syncStatus: changed ? 'updated' : 'existing' });
+        const oldTitle = existing.title; const dueChanged = existing.dueAt !== candidate.dueAt; const recurrenceChanged = (existing.recurrenceRule ?? null) !== (candidate.recurrenceRule ?? null); const changed = oldTitle !== candidate.title || dueChanged || recurrenceChanged;
+        Object.assign(existing, { externalId: candidate.externalId, courseName: candidate.courseName, courseCode: candidate.courseCode, title: candidate.title, itemType: candidate.itemType, dueAt: candidate.dueAt, recurrenceRule: candidate.recurrenceRule ?? null, sourceUrl: candidate.sourceUrl, lastSeenAt: nowIso(), syncStatus: changed ? 'updated' : 'existing' });
         const memo = mapping?.memoId ? snapshot.memos.find((item) => item.id === mapping.memoId) : snapshot.memos.find((item) => item.source === 'blackboard' && ((candidate.externalId && item.externalItemId === candidate.externalId) || (!candidate.externalId && item.sourceUrl === candidate.sourceUrl)));
         const reminder = mapping?.reminderId ? snapshot.reminders.find((item) => item.id === mapping.reminderId) : memo ? snapshot.reminders.find((item) => item.memoId === memo.id) : undefined;
         if (memo) { if (memo.title === oldTitle) memo.title = candidate.title; memo.updatedAt = nowIso(); }
-        if (reminder) { if (reminder.title === oldTitle) reminder.title = candidate.title; reminder.dueAt = candidate.dueAt; reminder.recurrenceAnchorAt ??= candidate.dueAt; reminder.updatedAt = nowIso(); }
+        if (reminder) { if (reminder.title === oldTitle) reminder.title = candidate.title; reminder.dueAt = candidate.dueAt; reminder.recurrenceRule = candidate.recurrenceRule ?? null; reminder.recurrenceAnchorAt ??= candidate.dueAt; if (dueChanged || recurrenceChanged) { reminder.notificationSentAt = null; reminder.status = 'pending'; } reminder.updatedAt = nowIso(); }
         if (mapping) Object.assign(mapping, { key, externalId: candidate.externalId, sourceUrl: candidate.sourceUrl, updatedAt: nowIso() }); else (snapshot.externalMappings ??= []).push({ key, externalId: candidate.externalId, sourceUrl: candidate.sourceUrl, memoId: memo?.id ?? null, reminderId: reminder?.id ?? null, updatedAt: nowIso() });
         if (changed) result.updatedCount += 1; else result.existingCount += 1; continue;
       }
       const timestamp = nowIso(); const memoId = createId('memo'); const reminderId = createId('reminder');
-      const memo: Memo = { id: memoId, title: candidate.title, richText: remoteMemoBody(candidate.courseName, candidate.itemType, candidate.sourceUrl), categoryId: 'course', tags: [candidate.itemType, candidate.courseCode ?? candidate.courseName], source: 'blackboard', externalItemId: candidate.externalId, sourceUrl: candidate.sourceUrl, createdAt: timestamp, updatedAt: timestamp };
-      snapshot.memos.unshift(memo); snapshot.reminders.push({ id: reminderId, memoId, title: candidate.title, dueAt: candidate.dueAt, recurrenceRule: null, status: 'pending', notificationSentAt: null, recurrenceAnchorAt: candidate.dueAt, occurrenceHistory: [], createdAt: timestamp, updatedAt: timestamp });
+      const memo: Memo = { id: memoId, title: candidate.title, richText: remoteMemoBody(candidate.courseName, candidate.itemType, candidate.sourceUrl, candidate.localMemoContent), categoryId: 'course', tags: [candidate.itemType, candidate.courseCode ?? candidate.courseName], source: 'blackboard', externalItemId: candidate.externalId, sourceUrl: candidate.sourceUrl, createdAt: timestamp, updatedAt: timestamp };
+      snapshot.memos.unshift(memo); snapshot.reminders.push({ id: reminderId, memoId, title: candidate.title, dueAt: candidate.dueAt, recurrenceRule: candidate.recurrenceRule ?? null, status: 'pending', notificationSentAt: null, recurrenceAnchorAt: candidate.dueAt, occurrenceHistory: [], createdAt: timestamp, updatedAt: timestamp });
       snapshot.blackboardItems.push({ ...candidate, id: key, lastSeenAt: timestamp, syncStatus: 'new' }); snapshot.externalMappings.push({ key, externalId: candidate.externalId, memoId, reminderId, sourceUrl: candidate.sourceUrl, updatedAt: timestamp }); result.newCount += 1;
     }
     if (candidates.length > 0) {

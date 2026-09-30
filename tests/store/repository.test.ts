@@ -70,6 +70,52 @@ describe('LocalRepository', () => {
     expect(repository.load().memos).toHaveLength(1);
     expect(repository.load().reminders[0].dueAt).toBe('2026-10-09T23:59:00+08:00');
   });
+
+  it('persists and updates a Blackboard recurrence rule by UID', () => {
+    repository.importBlackboardItems([{
+      externalId: 'bb-weekly', courseName: 'MATH 101', courseCode: 'MATH101', title: 'Weekly seminar', itemType: 'event',
+      dueAt: '2026-10-08T10:30:00+08:00', recurrenceRule: 'FREQ=WEEKLY', sourceUrl: 'https://bb.cuhk.edu.cn/item/weekly',
+    }]);
+    repository.importBlackboardItems([{
+      externalId: 'bb-weekly', courseName: 'MATH 101', courseCode: 'MATH101', title: 'Weekly seminar', itemType: 'event',
+      dueAt: '2026-10-09T10:30:00+08:00', recurrenceRule: 'FREQ=MONTHLY', sourceUrl: 'https://bb.cuhk.edu.cn/item/weekly',
+    }]);
+
+    const snapshot = repository.load();
+    expect(snapshot.reminders).toHaveLength(1);
+    expect(snapshot.reminders[0]).toMatchObject({ dueAt: '2026-10-09T10:30:00+08:00', recurrenceRule: 'FREQ=MONTHLY' });
+  });
+
+  it('persists iCalendar descriptions as the imported memo body', () => {
+    repository.importBlackboardItems([{
+      externalId: 'bb-description', courseName: 'CSC 201', courseCode: 'CSC201', title: 'Reading', itemType: 'event',
+      dueAt: '2026-10-08T10:30:00+08:00', sourceUrl: 'https://bb.cuhk.edu.cn/calendar/event/description', localMemoContent: 'Read chapter 1\nBring questions',
+    }]);
+    expect(repository.load().memos[0].richText).toContain('Read chapter 1');
+    expect(repository.load().memos[0].richText).toContain('Bring questions');
+  });
+
+  it('removes the legacy date-cell placeholder created by the old Blackboard importer', () => {
+    repository.replaceSnapshot({
+      memos: [{ id: 'legacy-memo', title: '30', richText: '<p>未命名课程</p>', categoryId: 'course', tags: ['other'], source: 'blackboard', externalItemId: null, sourceUrl: 'https://bb.cuhk.edu.cn/', createdAt: '2026-09-30T00:00:00+08:00', updatedAt: '2026-09-30T00:00:00+08:00' }],
+      reminders: [{ id: 'legacy-reminder', memoId: 'legacy-memo', title: '30', dueAt: '2026-09-30T00:00:00+08:00', recurrenceRule: null, status: 'pending', notificationSentAt: null, createdAt: '2026-09-30T00:00:00+08:00', updatedAt: '2026-09-30T00:00:00+08:00' }],
+      blackboardItems: [{ id: 'url:https://bb.cuhk.edu.cn/', externalId: null, courseName: '未命名课程', courseCode: null, title: '30', itemType: 'other', dueAt: '2026-09-30T00:00:00+08:00', sourceUrl: 'https://bb.cuhk.edu.cn/' }],
+      courseSchedules: [], syncRuns: [], externalMappings: [{ key: 'url:https://bb.cuhk.edu.cn/', externalId: null, memoId: 'legacy-memo', reminderId: 'legacy-reminder', sourceUrl: 'https://bb.cuhk.edu.cn/', updatedAt: '2026-09-30T00:00:00+08:00' }],
+    });
+
+    expect(repository.load().blackboardItems).toHaveLength(0);
+    expect(repository.load().memos).toHaveLength(0);
+    expect(repository.load().reminders).toHaveLength(0);
+
+    repository.importBlackboardItems([{
+      externalId: 'bb-real-1', courseName: 'CIE6007', courseCode: 'CIE6007', title: 'Homework 1', itemType: 'assignment', dueAt: '2026-10-08T23:59:00+08:00', sourceUrl: 'https://bb.cuhk.edu.cn/calendar/event/1',
+    }]);
+
+    const snapshot = repository.load();
+    expect(snapshot.blackboardItems.map((item) => item.title)).toEqual(['Homework 1']);
+    expect(snapshot.memos.map((item) => item.title)).toEqual(['Homework 1']);
+    expect(snapshot.reminders.map((item) => item.title)).toEqual(['Homework 1']);
+  });
   it('supports categories, tags and standalone reminders', () => {
     const memo = repository.saveMemoDraft({ title: '标签', body: '<p>x</p>', reminderAt: '', recurrenceRule: null, categoryId: 'work', tags: ['a', 'b'] });
     const reminder = repository.saveReminderDraft({ title: '独立提醒', dueAt: '2026-10-10T09:00', recurrenceRule: null });

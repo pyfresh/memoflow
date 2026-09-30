@@ -19,6 +19,11 @@ describe('normalizeExternalItem', () => {
       dueAt: '2026-10-08T23:59:00+08:00',
     });
   });
+
+  it('keeps supported recurrence frequencies and clears unsupported rules', () => {
+    expect(normalizeExternalItem({ title: 'Weekly', dueAt: '2026-10-08 09:00', recurrenceRule: 'DTSTART=20261008;FREQ=WEEKLY', sourceUrl: 'https://bb.cuhk.edu.cn/item/weekly' })).toMatchObject({ recurrenceRule: 'FREQ=WEEKLY' });
+    expect(normalizeExternalItem({ title: 'Hourly', dueAt: '2026-10-08 09:00', recurrenceRule: 'FREQ=HOURLY', sourceUrl: 'https://bb.cuhk.edu.cn/item/hourly' }).recurrenceRule).toBeNull();
+  });
 });
 
 describe('classifyImportCandidate', () => {

@@ -41,6 +41,7 @@ export interface BlackboardItem {
   title: string;
   itemType: BlackboardItemType;
   dueAt: string | null;
+  recurrenceRule?: string | null;
   sourceUrl: string;
   lastSeenAt?: string;
   lastPayloadHash?: string;
