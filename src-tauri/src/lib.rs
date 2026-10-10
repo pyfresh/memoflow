@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Mutex;
 mod db;
 
@@ -20,75 +19,63 @@ use tauri::{Emitter, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 const BLACKBOARD_URL: &str = "https://bb.cuhk.edu.cn/";
 const MAX_CAPTURE_BYTES: usize = 1_000_000;
 const MAX_CAPTURE_ITEMS: usize = 5_000;
-const MAX_ICAL_BYTES: usize = 2 * 1024 * 1024;
+const MAX_SCHEDULE_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
+const PUSHPLUS_ENDPOINT: &str = "https://www.pushplus.plus/send";
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct PushPlusMessage {
+    token: String,
+    title: String,
+    content: String,
+    channel: String,
+    template: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct PushPlusResponse {
+    code: i64,
+    msg: String,
+    #[serde(default)]
+    data: Option<Value>,
+}
+
+fn validate_pushplus_token(token: &str) -> Result<(), String> {
+    if token.trim().is_empty() {
+        Err("PushPlus Token 不能为空".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn redact_pushplus_token(token: &str) -> String {
+    let value = token.trim();
+    if value.chars().count() <= 6 {
+        return "••••••".to_string();
+    }
+    let prefix: String = value.chars().take(3).collect();
+    let suffix: String = value
+        .chars()
+        .rev()
+        .take(3)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    format!("{prefix}••••{suffix}")
+}
+
+fn parse_pushplus_response(body: &str) -> Result<PushPlusResponse, String> {
+    let response = serde_json::from_str::<PushPlusResponse>(body)
+        .map_err(|_| "PushPlus 响应格式无效".to_string())?;
+    if response.code != 200 {
+        return Err(format!("PushPlus：{}", response.msg));
+    }
+    Ok(response)
+}
 
 #[derive(Default)]
 struct CaptureState {
     nonce: Mutex<Option<String>>,
-}
-
-fn validate_ical_url(raw: &str) -> Result<Url, String> {
-    if raw.len() > 2048 {
-        return Err("iCal 链接过长，请重新复制 Blackboard 的日历链接".to_string());
-    }
-    let url = Url::parse(raw.trim())
-        .map_err(|_| "iCal 链接格式无效，请重新复制 Blackboard 链接".to_string())?;
-    if url.scheme() != "https" || url.host_str() != Some("bb.cuhk.edu.cn") {
-        return Err("只支持 bb.cuhk.edu.cn 提供的 HTTPS iCalendar 链接".to_string());
-    }
-    let path = url.path().to_ascii_lowercase();
-    if !(path.ends_with(".ics") || path.contains("/calendarfeed/")) {
-        return Err(
-            "链接不是 Blackboard iCalendar Feed，请复制 Get External Calendar Link".to_string(),
-        );
-    }
-    Ok(url)
-}
-
-#[tauri::command]
-async fn fetch_blackboard_ical(url: String) -> Result<String, String> {
-    let validated = validate_ical_url(&url)?;
-    let raw_url = validated.to_string();
-    tauri::async_runtime::spawn_blocking(move || {
-        let output = Command::new("curl.exe")
-            .args([
-                "--silent",
-                "--show-error",
-                "--fail",
-                "--location",
-                "--max-filesize",
-                "2097152",
-                "--max-time",
-                "15",
-                "--connect-timeout",
-                "5",
-                "--user-agent",
-                "MemoFlow/0.1 Blackboard iCalendar import",
-                raw_url.as_str(),
-            ])
-            .output()
-            .map_err(|_| "无法启动网络请求，请确认系统支持 HTTPS 访问".to_string())?;
-        if !output.status.success() {
-            return Err("Blackboard 日历链接已过期或无权访问，请重新生成链接".to_string());
-        }
-        if output.stdout.len() > MAX_ICAL_BYTES {
-            return Err("Blackboard 日历内容超过 2 MiB，未执行导入".to_string());
-        }
-        let content = String::from_utf8(output.stdout)
-            .map_err(|_| "Blackboard 日历不是 UTF-8 文本，无法解析".to_string())?;
-        if !content
-            .trim_start_matches('\u{feff}')
-            .lines()
-            .any(|line| line.trim().eq_ignore_ascii_case("BEGIN:VCALENDAR"))
-        {
-            return Err(
-                "返回内容不是有效的 iCalendar 日历，请重新生成 Blackboard 链接".to_string(),
-            );
-        }
-        Ok(content)
-    })
-    .await
-    .map_err(|_| "读取 Blackboard 日历的任务失败，请重试".to_string())?
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -117,6 +104,8 @@ struct CaptureRow {
     due_at: String,
     #[serde(rename = "sourceUrl")]
     source_url: String,
+    #[serde(rename = "sourceKind", default)]
+    source_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -175,7 +164,7 @@ fn decode_capture_result(
 fn load_snapshot(app: tauri::AppHandle) -> Result<Value, String> {
     let database = db::SnapshotDb::open(database_path(&app)?).map_err(|error| error.to_string())?;
     Ok(database.load_snapshot().map_err(|error| error.to_string())?.unwrap_or_else(|| serde_json::json!({
-        "memos": [], "reminders": [], "blackboardItems": [], "courseSchedules": [], "syncRuns": [], "externalMappings": []
+        "memos": [], "reminders": [], "blackboardItems": [], "courseSchedules": [], "countdowns": [], "syncRuns": [], "externalMappings": []
     })))
 }
 
@@ -186,6 +175,28 @@ fn save_snapshot(app: tauri::AppHandle, snapshot: Value) -> Result<(), String> {
     database
         .save_snapshot(&snapshot)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn read_schedule_archive(path: String) -> Result<Vec<u8>, String> {
+    let path = PathBuf::from(path.trim());
+    let is_zip = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.eq_ignore_ascii_case("zip"))
+        .unwrap_or(false);
+    if !is_zip {
+        return Err("只能导入 ZIP 格式的课表文件".to_string());
+    }
+
+    let metadata = fs::metadata(&path).map_err(|error| format!("无法读取课表文件: {error}"))?;
+    if !metadata.is_file() {
+        return Err("课表路径不是文件".to_string());
+    }
+    if metadata.len() > MAX_SCHEDULE_ARCHIVE_BYTES {
+        return Err("课表 ZIP 文件不能超过 64 MB".to_string());
+    }
+    fs::read(&path).map_err(|error| format!("无法读取课表文件: {error}"))
 }
 
 #[tauri::command]
@@ -241,7 +252,20 @@ fn capture_blackboard_calendar(
         r#"
       (() => {{
         try {{
-        const nodes = [...document.querySelectorAll('[data-calendar-item], [data-item-id], [data-due], [data-due-date], [data-event-id], [data-event], [data-start], .calendarEvent, .calendar-event, .eventItem, .fc-event, .fc-day-grid-event, .fc-time-grid-event, [class*="calendarEvent"], [class*="calendar-event"]')];
+        const calendarEventSelector = '[data-calendar-item], [data-item-id], [data-due], [data-due-date], [data-event-id], [data-event], [data-start], .calendarEvent, .calendar-event, .eventItem, .fc-event, .fc-day-grid-event, .fc-time-grid-event, [class*="calendarEvent"], [class*="calendar-event"], a.event, [class~="event"], a[href*="/calendar/event/"]';
+        const roots = [];
+        const pendingRoots = [document];
+        const seenRoots = new Set();
+        while (pendingRoots.length) {{
+          const root = pendingRoots.shift();
+          if (!root || seenRoots.has(root)) continue;
+          seenRoots.add(root);
+          roots.push(root);
+          for (const frame of [...(root.querySelectorAll?.('iframe') || [])]) {{
+            try {{ if (frame.contentDocument) pendingRoots.push(frame.contentDocument); }} catch {{}}
+          }}
+        }}
+        const nodes = roots.flatMap((root) => [...root.querySelectorAll(calendarEventSelector)]);
         const cleanText = (value) => (value || '').replace(/\s+/g, ' ').trim();
         const ownOrChildText = (element, selectors) => {{
           if (element.matches?.(selectors)) return cleanText(element.textContent);
@@ -271,22 +295,95 @@ fn capture_blackboard_calendar(
           const withoutTime = value.replace(/^\d{{1,2}}:\d{{2}}\s*[ap](?:m)?\s*/i, '').trim();
           return /^\d{{1,2}}$/.test(withoutTime) ? '' : withoutTime;
         }};
+        const fullCalendarEvents = (() => {{
+          try {{
+            const jquery = window.jQuery || window.$;
+            const calendar = document.querySelector('#calendar');
+            if (!jquery || !calendar || typeof jquery(calendar).fullCalendar !== 'function') return [];
+            const events = jquery(calendar).fullCalendar('clientEvents');
+            return Array.isArray(events) ? events : [];
+          }} catch {{
+            return [];
+          }}
+        }})();
+        const eventDataFor = (title) => fullCalendarEvents.find((event) => cleanText(event?.title) === cleanText(title)) || null;
+        const isAssignmentUrl = (value) => {{
+          try {{
+            const url = new URL(value, location.href);
+            return url.hostname.toLowerCase() === 'bb.cuhk.edu.cn'
+              && url.pathname.toLowerCase().includes('/webapps/assignment/uploadassignment')
+              && Boolean(url.searchParams.get('content_id'))
+              && Boolean(url.searchParams.get('course_id'));
+          }} catch {{
+            return false;
+          }}
+        }};
+        const findAssignmentHref = (html, baseUrl, title) => {{
+          try {{
+            const detail = new DOMParser().parseFromString(html, 'text/html');
+            const normalizedTitle = cleanText(title).toLowerCase();
+            const matches = [...detail.querySelectorAll('a[href]')].map((anchor) => {{
+              const href = new URL(anchor.getAttribute('href') || '', baseUrl).href;
+              if (!isAssignmentUrl(href)) return null;
+              const anchorText = cleanText(anchor.textContent).toLowerCase();
+              const score = normalizedTitle && (anchorText === normalizedTitle || anchorText.includes(normalizedTitle)) ? 2 : 1;
+              return {{ href, score }};
+            }}).filter(Boolean);
+            const decoded = html.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\\u0026/gi, '&').replace(/\\x26/gi, '&').replace(/\\\\\//g, '/');
+            const pattern = /(?:https?:\/\/bb\.cuhk\.edu\.cn)?\/webapps\/assignment\/uploadAssignment\?[^\s"'<>\\]+/gi;
+            for (const match of decoded.matchAll(pattern)) {{
+              try {{
+                const href = new URL(match[0].replace(/[),.;]+$/, ''), baseUrl).href;
+                if (isAssignmentUrl(href)) matches.push({{ href, score: 1 }});
+              }} catch {{}}
+            }}
+            return matches.sort((left, right) => right.score - left.score)[0]?.href || '';
+          }} catch {{
+            return '';
+          }}
+        }};
+        const resolveEventHref = (href, title) => {{
+          try {{
+            if (!href) return '';
+            const absolute = new URL(href, location.href).href;
+            if (isAssignmentUrl(absolute) || !/\/calendar\/event\//i.test(new URL(absolute).pathname)) return absolute;
+            const request = new XMLHttpRequest();
+            request.open('GET', absolute, false);
+            request.withCredentials = true;
+            request.send();
+            if (request.status >= 200 && request.status < 400) return findAssignmentHref(request.responseText, absolute, title) || absolute;
+            return absolute;
+          }} catch {{
+            return href || '';
+          }}
+        }};
         const parseDateValue = (value) => {{
           const text = cleanText(value);
           if (!text) return '';
           const iso = text.match(/(20\d{{2}}[-/]\d{{1,2}}[-/]\d{{1,2}})/);
-          if (iso) return iso[1].replace(/\//g, '-');
+          if (iso) {{
+            const parts = iso[1].split(/[-/]/).map(Number);
+            if (parts[1] >= 1 && parts[1] <= 12 && parts[2] >= 1 && parts[2] <= 31) return iso[1].replace(/\//g, '-');
+          }}
           const slash = text.match(/\b(\d{{1,2}})[-\/]([0-9]{{1,2}})[-\/](20\d{{2}})\b/);
           if (slash) return `${{slash[3]}}-${{String(slash[1]).padStart(2, '0')}}-${{String(slash[2]).padStart(2, '0')}}`;
+          const named = text.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{{1,2}})(?:,\s*|\s+)(20\d{{2}})\b/i);
+          if (named) {{
+            const month = monthNames[named[1].toLowerCase()];
+            const day = Number(named[2]);
+            if (month && day >= 1 && day <= 31) return `${{named[3]}}-${{String(month).padStart(2, '0')}}-${{String(day).padStart(2, '0')}}`;
+          }}
           return '';
         }};
         const monthNames = {{ january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12 }};
         const calendarReference = (() => {{
-          const match = cleanText(document.body.innerText).match(/(January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d{{2}})/i);
+          const calendarText = roots.map((root) => cleanText(root.body?.innerText || root.documentElement?.textContent || '')).join(' ');
+          const match = calendarText.match(/(January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d{{2}})/i);
           return match ? {{ month: monthNames[match[1].toLowerCase()], year: Number(match[2]) }} : null;
         }})();
         const nearestDate = (element) => {{
-          const owner = element.closest?.('[data-date], [data-event-date], [data-day], td[title], td, .dayGridCell, .calendarDay, .day, [class*="day"], [role="gridcell"]');
+          const owner = element.closest?.('[data-date], [data-event-date], [data-day], td[title], td, .dayGridCell, .calendarDay, .day, [role="gridcell"]')
+            || element.parentElement?.closest?.('[data-date], [data-event-date], [data-day], td[title], td, .dayGridCell, .calendarDay, .day, [role="gridcell"]');
           if (!owner) return '';
           for (const attribute of ['data-date', 'data-event-date', 'data-day', 'title', 'aria-label']) {{
             const parsed = parseDateValue(owner.getAttribute(attribute));
@@ -295,8 +392,9 @@ fn capture_blackboard_calendar(
           const fromText = parseDateValue(owner.textContent);
           if (fromText) return fromText;
           if (!calendarReference) return '';
-          const dayText = owner.querySelector?.('.dayNumber, .day-number, .date, [class*="dayNumber"], [class*="day-number"]')?.textContent || owner.textContent;
-          const dayMatch = cleanText(dayText).match(/^([0-9]{{1,2}})(?:\s|$)/);
+          const dayText = owner.querySelector?.('.dayNumber, .day-number, .date, [class*="dayNumber"], [class*="day-number"], [class*="date"]')?.textContent
+            || cleanText(owner.textContent).replace(/\b\d{{1,2}}:\d{{2}}\s*[ap](?:m)?\b/gi, '');
+          const dayMatch = cleanText(dayText).match(/\b([0-9]{{1,2}})\b/);
           if (!dayMatch) return '';
           const day = Number(dayMatch[1]);
           if (day < 1 || day > 31) return '';
@@ -310,6 +408,18 @@ fn capture_blackboard_calendar(
           return `${{year}}-${{String(month).padStart(2, '0')}}-${{String(day).padStart(2, '0')}}`;
         }};
         const rows = nodes.map((element) => {{
+          const title = eventTitle(element);
+          if (!title) return null;
+          const eventData = eventDataFor(title);
+          const eventId = element.getAttribute('data-item-id') || element.getAttribute('data-id') || element.getAttribute('data-event-id') || element.id
+            || eventData?.id
+            || '';
+          const calendarLaunchHref = eventData?.id && (eventData?.attemptable === true || /GradableItem/i.test(eventData?.itemSourceType || '') || /assignment/i.test(eventData?.eventType || ''))
+            ? `/webapps/calendar/launch/attempt/${{encodeURIComponent(eventData.id)}}`
+            : '';
+          const calendarStart = eventData?.start instanceof Date
+            ? eventData.start.toISOString()
+            : (typeof eventData?.start === 'string' ? eventData.start : '');
           const dueNode = element.querySelector('time[datetime], [data-due], [data-due-date]');
           const dueAt = dueNode?.getAttribute('datetime')
             || dueNode?.getAttribute('data-due')
@@ -320,25 +430,35 @@ fn capture_blackboard_calendar(
             || element.getAttribute('data-start')
             || element.getAttribute('datetime')
             || parseDateValue(element.getAttribute('title'))
+            || parseDateValue(element.textContent)
             || nearestDate(element)
+            || calendarStart
             || '';
-          const title = eventTitle(element);
-          if (!dueAt || !title) return null;
-          const href = element.matches?.('a[href]') ? element.href : (element.querySelector('a[href]')?.href || location.href);
+          if (!dueAt) return null;
+          const rawHref = element.getAttribute('data-assignment-url')
+            || (element.matches?.('a[href]') ? element.href : (element.querySelector('a[href]')?.href || ''))
+            || calendarLaunchHref;
+          const href = resolveEventHref(rawHref, title);
+          const sourceKind = (() => {{
+            if (isAssignmentUrl(href) || /\/webapps\/calendar\/launch\/attempt\//i.test(href)) return 'assignment';
+            try {{ return new URL(href, location.href).pathname.toLowerCase().includes('/calendar/event/') ? 'event' : 'unknown'; }} catch {{ return 'unknown'; }}
+          }})();
           const courseName = firstAttribute(element, ['data-course-name', 'data-calendar-name', 'data-calendar-title'])
             || firstDescendantText(element, '[data-course-name], [data-calendar-name], .course-name, .course, .calendar-name')
+            || cleanText(eventData?.calendarName || eventData?.calendarNameLocalizable?.rawValue || '')
             || 'Blackboard 课程';
           const itemType = inferItemType(title, firstAttribute(element, ['data-item-type'])
             || firstDescendantText(element, '[data-item-type], .item-type')
             || (/fc-event|calendar-event|eventItem/i.test(element.className || '') ? 'event' : 'other'));
           return {{
-            externalId: element.getAttribute('data-item-id') || element.getAttribute('data-id') || element.getAttribute('data-event-id') || element.id || null,
+            externalId: eventId || null,
             courseName,
             courseCode: firstAttribute(element, ['data-course-code']) || firstDescendantText(element, '[data-course-code], .course-code') || null,
             title,
             itemType,
             dueAt,
-            sourceUrl: href
+            sourceUrl: href,
+            sourceKind,
           }};
         }}).filter(Boolean);
         const seenRows = new Set();
@@ -349,7 +469,7 @@ fn capture_blackboard_calendar(
           seenRows.add(key);
           return true;
         }});
-        const scheduleNodes = [...document.querySelectorAll('[data-course-schedule], [data-class-event], [data-weekday], [data-day-of-week], [data-start-time]')];
+        const scheduleNodes = roots.flatMap((root) => [...root.querySelectorAll('[data-course-schedule], [data-class-event], [data-weekday], [data-day-of-week], [data-start-time]')]);
         const readValue = (element, attributes, selectors) => {{
           for (const attribute of attributes) {{ const value = element.getAttribute(attribute); if (value) return value; }}
           for (const selector of selectors) {{ const value = (element.querySelector(selector)?.textContent || '').replace(/\s+/g, ' ').trim(); if (value) return value; }}
@@ -421,6 +541,35 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+#[tauri::command]
+async fn send_pushplus_message(message: PushPlusMessage) -> Result<PushPlusResponse, String> {
+    validate_pushplus_token(&message.token)?;
+    let client = reqwest::Client::builder()
+        .use_rustls_tls()
+        .build()
+        .map_err(|error| format!("无法创建 PushPlus 请求：{error}"))?;
+    let response = client
+        .post(PUSHPLUS_ENDPOINT)
+        .json(&message)
+        .send()
+        .await
+        .map_err(|error| {
+            format!(
+                "PushPlus 请求失败（Token {}）：{error}",
+                redact_pushplus_token(&message.token)
+            )
+        })?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("无法读取 PushPlus 响应：{error}"))?;
+    if !status.is_success() {
+        return Err(format!("PushPlus HTTP {}", status.as_u16()));
+    }
+    parse_pushplus_response(&body)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -429,12 +578,13 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             greet,
+            send_pushplus_message,
             load_snapshot,
             save_snapshot,
+            read_schedule_archive,
             open_blackboard_window,
             capture_blackboard_calendar,
-            clear_blackboard_session,
-            fetch_blackboard_ical
+            clear_blackboard_session
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -442,7 +592,31 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_capture_result, validate_ical_url};
+    use super::{decode_capture_result, parse_pushplus_response, validate_pushplus_token};
+
+    #[test]
+    fn parses_successful_pushplus_response() {
+        let response =
+            parse_pushplus_response(r#"{"code":200,"msg":"请求成功"}"#).expect("success");
+        assert_eq!(response.code, 200);
+        assert_eq!(response.msg, "请求成功");
+    }
+
+    #[test]
+    fn rejects_pushplus_business_error_and_blank_token() {
+        let error = parse_pushplus_response(r#"{"code":904,"msg":"token无效"}"#)
+            .expect_err("business error");
+        assert!(error.contains("token无效"));
+        assert!(validate_pushplus_token("   ").is_err());
+    }
+
+    #[test]
+    fn does_not_include_full_token_in_redacted_error() {
+        let token = "secret-token-123";
+        let redacted = super::redact_pushplus_token(token);
+        assert!(!redacted.contains(token));
+        assert!(redacted.contains("••••"));
+    }
 
     #[test]
     fn decodes_eval_callback_payload_and_validates_nonce() {
@@ -467,21 +641,20 @@ mod tests {
     }
 
     #[test]
-    fn validates_private_blackboard_ical_urls() {
-        assert!(validate_ical_url(
-            "https://bb.cuhk.edu.cn/webapps/calendar/calendarFeed/token/learn.ics"
-        )
-        .is_ok());
-        assert!(validate_ical_url(
-            "http://bb.cuhk.edu.cn/webapps/calendar/calendarFeed/token/learn.ics"
-        )
-        .is_err());
-        assert!(validate_ical_url("https://example.com/calendar.ics").is_err());
-        assert!(validate_ical_url("https://bb.cuhk.edu.cn/webapps/calendar/index").is_err());
-        let long_url = format!(
-            "https://bb.cuhk.edu.cn/calendarFeed/{}.ics",
-            "x".repeat(2048)
+    fn injected_assignment_pattern_does_not_double_escape_regex_delimiters() {
+        let source = include_str!("lib.rs");
+        let pattern_line = source
+            .lines()
+            .find(|line| line.contains("const pattern ="))
+            .expect("assignment URL pattern should be present");
+
+        assert!(
+            pattern_line.contains(r"\/webapps\/assignment\/uploadAssignment"),
+            "the JavaScript regex must escape slash delimiters once: {pattern_line}"
         );
-        assert!(validate_ical_url(&long_url).is_err());
+        assert!(
+            !pattern_line.contains(r"\\/webapps\\/assignment\\/uploadAssignment"),
+            "the JavaScript regex must not double-escape slash delimiters: {pattern_line}"
+        );
     }
 }

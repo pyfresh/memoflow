@@ -1,20 +1,67 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { createEventDispatcher } from 'svelte';
+  import { openUrl } from '@tauri-apps/plugin-opener';
   import type { MemoDraft } from '$lib/data/repository';
   import SelectMenu from './SelectMenu.svelte';
 
   export let onSave: (draft: MemoDraft) => void = () => {};
   export let initial: Partial<MemoDraft> = {};
+  export let existingMemoId: string | null = null;
+  export let existingReminderId: string | null = null;
+  export let onComplete: (detail: { memoId: string | null; reminderId: string | null }) => void = () => {};
+  export let onDelete: (detail: { memoId: string | null; reminderId: string | null }) => void = () => {};
 
-  const dispatch = createEventDispatcher<{ save: MemoDraft; cancel: void }>();
+  const dispatch = createEventDispatcher<{
+    save: MemoDraft;
+    cancel: void;
+    complete: { memoId: string | null; reminderId: string | null };
+    delete: { memoId: string | null; reminderId: string | null };
+  }>();
   const categoryOptions = [
     { value: 'course', label: '课程' },
     { value: 'life', label: '生活' },
     { value: 'inbox', label: '待整理' },
   ];
+
+  function normalizeUrl(value: string): string {
+    try { return new URL(value, typeof window !== 'undefined' ? window.location.href : undefined).href; }
+    catch { return value; }
+  }
+
+  function cleanLegacySourceLink(html: string, sourceUrl: string): string {
+    if (!html || !sourceUrl || typeof DOMParser === 'undefined') return html;
+    const document = new DOMParser().parseFromString(`<div id="memo-body-root">${html}</div>`, 'text/html');
+    const root = document.querySelector('#memo-body-root');
+    if (!root) return html;
+    const normalizedSource = normalizeUrl(sourceUrl);
+    for (const anchor of Array.from(root.querySelectorAll('a[href]'))) {
+      if (anchor.textContent?.trim() !== '打开 Blackboard 项目' || normalizeUrl(anchor.getAttribute('href') ?? '') !== normalizedSource) continue;
+      const parent = anchor.parentElement;
+      if (parent?.tagName.toLowerCase() === 'p' && parent.textContent?.trim() === anchor.textContent?.trim()) parent.remove();
+      else anchor.remove();
+    }
+    return root.innerHTML;
+  }
+
+  function isSafeExternalUrl(value: string): boolean {
+    try { const protocol = new URL(value).protocol; return protocol === 'http:' || protocol === 'https:'; }
+    catch { return false; }
+  }
+
+  function isAssignmentUrl(value: string): boolean {
+    try {
+      const url = new URL(value);
+      return url.hostname.toLowerCase() === 'bb.cuhk.edu.cn'
+        && url.pathname.toLowerCase().includes('/webapps/assignment/uploadassignment')
+        && Boolean(url.searchParams.get('content_id')) && Boolean(url.searchParams.get('course_id'));
+    } catch { return false; }
+  }
   let title = initial.title ?? '';
-  let body = initial.body ?? '';
+  let sourceUrl = initial.sourceUrl ?? '';
+  let sourceKind = initial.sourceKind ?? (isAssignmentUrl(sourceUrl) ? 'assignment' : sourceUrl.includes('/calendar/event/') ? 'event' : 'unknown');
+  let sourceError = '';
+  let body = cleanLegacySourceLink(initial.body ?? '', sourceUrl);
   let reminderAt = initial.reminderAt ?? '';
   let recurrenceRule = initial.recurrenceRule ?? null;
   let categoryId = initial.categoryId ?? 'life';
@@ -37,6 +84,15 @@
     if (bodyEditor && bodyEditor.innerHTML !== nextBody) bodyEditor.innerHTML = nextBody;
   }
 
+  async function openSource() {
+    if (!isSafeExternalUrl(sourceUrl) || sourceKind !== 'assignment') return;
+    sourceError = '';
+    try {
+      if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) await openUrl(sourceUrl);
+      else window.open(sourceUrl, '_blank', 'noopener,noreferrer');
+    } catch { sourceError = '无法打开作业提交页面，请先在打开的浏览器中登录 Blackboard。'; }
+  }
+
   function formatBold() {
     if (!body.trim()) return;
     setBody(`<strong>${body.replace(/<[^>]+>/g, '')}</strong>`);
@@ -55,12 +111,28 @@
     setBody(`${body.replace(/<[^>]+>/g, '')}<p><a href="${url}" target="_blank" rel="noreferrer">${label}</a></p>`);
   }
 
+  function completeItem() {
+    if (!existingReminderId) return;
+    const detail = { memoId: existingMemoId, reminderId: existingReminderId };
+    onComplete(detail);
+    dispatch('complete', detail);
+  }
+
+  function deleteItem() {
+    if (!existingMemoId && !existingReminderId) return;
+    const detail = { memoId: existingMemoId, reminderId: existingReminderId };
+    onDelete(detail);
+    dispatch('delete', detail);
+  }
+
   function submit() {
     const draft: MemoDraft = {
       id: initial.id,
       standalone,
       title: title.trim(),
       body,
+      sourceUrl: sourceUrl || null,
+      sourceKind,
       reminderAt,
       recurrenceRule,
       categoryId,
@@ -78,6 +150,8 @@
       <h2>{standalone ? '只提醒我这件事' : '写下现在要记住的事'}</h2>
     </div>
     <div class="editor-actions">
+      {#if existingReminderId}<button class="complete-action" type="button" on:click={completeItem}>完成</button>{/if}
+      {#if existingMemoId || existingReminderId}<button class="delete-action" type="button" on:click={deleteItem}>删除</button>{/if}
       <button class="editor-cancel" type="button" aria-label="关闭编辑器" title="关闭" on:click={() => dispatch('cancel')}>×</button>
       <button class="primary" type="submit">{standalone ? '保存提醒' : '保存备忘录'}</button>
     </div>
@@ -96,6 +170,15 @@
         <button type="button" aria-label="项目列表" on:click={formatList}>☷</button>
         <button type="button" aria-label="插入链接" on:click={insertLink}>↗</button>
       </div>
+      {#if sourceKind === 'assignment' && isSafeExternalUrl(sourceUrl)}
+        <div class="source-link" role="group" aria-label="Blackboard 来源">
+          <span>已定位到作业提交页</span>
+          <button class="source-button" type="button" on:click={openSource}>↗ 打开作业</button>
+          {#if sourceError}<span class="source-error" role="status">{sourceError}</span>{/if}
+        </div>
+      {:else if sourceKind === 'event'}
+        <div class="source-warning" role="status">尚未定位到作业提交页，请重新打开 Blackboard 课程日历后同步。</div>
+      {/if}
       <div id="memo-body" bind:this={bodyEditor} class="body-editor" aria-label="正文" role="textbox" aria-multiline="true" contenteditable="true" data-placeholder="写下详细内容、清单或链接" on:input={updateBody}></div>
     </div>
 
@@ -153,9 +236,18 @@
   .toolbar { display:flex; gap:5px; margin-bottom:-2px; }
   .toolbar button { width:30px; height:29px; border:1px solid var(--line); border-radius:7px; background:var(--surface-subtle); color:var(--ink-soft); }
   .toolbar button:hover { border-color:var(--accent); color:var(--accent); }
+  .source-link, .source-warning { display:flex; align-items:center; flex-wrap:wrap; gap:10px; border:1px solid var(--accent-soft); border-radius:8px; padding:10px 12px; background:var(--surface-tint); color:var(--ink-soft); font-size:.78rem; }
+  .source-button { border:1px solid var(--accent); border-radius:7px; padding:7px 10px; background:var(--surface); color:var(--accent-strong); font:inherit; font-weight:700; cursor:pointer; }
+  .source-button:hover { background:var(--accent-soft); }
+  .source-error { flex-basis:100%; color:var(--danger, #b54747); font-size:.75rem; }
   .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
   .primary { border:0; border-radius:8px; padding:10px 14px; background:var(--accent); color:#fff; font:inherit; font-weight:750; cursor:pointer; box-shadow:0 6px 16px rgba(7,143,131,.2); }
   .primary:hover { background:var(--accent-strong); }
+  .complete-action, .delete-action { border:0; border-radius:8px; padding:10px 12px; font:inherit; font-size:.78rem; font-weight:750; cursor:pointer; }
+  .complete-action { background:#2e8064; color:#fff; }
+  .complete-action:hover, .complete-action:focus-visible { background:#24664f; }
+  .delete-action { background:#fff0ed; color:#a3433d; }
+  .delete-action:hover, .delete-action:focus-visible { background:#ffe1dc; }
   .editor-cancel { display:grid; place-items:center; width:42px; height:42px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink-soft); font-size:1.25rem; line-height:1; }
   .editor-cancel:hover { border-color:var(--accent); color:var(--accent); background:var(--surface-tint); }
   .standalone-toggle { flex-direction:row; align-items:center; gap:8px; font-weight:500; }

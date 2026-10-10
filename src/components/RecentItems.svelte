@@ -42,7 +42,15 @@
             <span class="recent-title">{item.title}</span>
             <span class:overdue={isOverdue(item)} class="recent-meta">
               <span>{formatDue(item.dueAt)}</span>
-              <span class:course={item.source === 'blackboard'} class:done={item.status !== 'pending'} class="tag">{item.category}</span>
+              {#if item.source === 'blackboard'}
+                <span class="recent-tags" aria-label="事项标签">
+                  {#each item.tags ?? [] as tag}
+                    <span class:done={item.status !== 'pending'} class="tag course">{tag}</span>
+                  {/each}
+                </span>
+              {:else}
+                <span class:done={item.status !== 'pending'} class="tag">{item.category}</span>
+              {/if}
             </span>
           </button>
           {#if item.status === 'pending'}

@@ -108,7 +108,13 @@ fn validate_snapshot(snapshot: &Value) -> Result<(), DbError> {
     for (field, records) in object {
         if matches!(
             field.as_str(),
-            "memos" | "reminders" | "blackboardItems" | "courseSchedules" | "syncRuns" | "externalMappings"
+            "memos"
+                | "reminders"
+                | "blackboardItems"
+                | "courseSchedules"
+                | "countdowns"
+                | "syncRuns"
+                | "externalMappings"
         ) && !records.is_array()
         {
             return Err(DbError::InvalidSnapshot(format!(
@@ -147,4 +153,3 @@ mod tests {
         assert_eq!(db.load_snapshot().unwrap(), Some(expected));
     }
 }
-

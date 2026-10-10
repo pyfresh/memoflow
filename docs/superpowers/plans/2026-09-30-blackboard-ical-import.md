@@ -1,5 +1,7 @@
 # Blackboard iCalendar Import Implementation Plan
 
+> Status: Superseded. The product now uses the authenticated Blackboard page import as its only sync path; this file is retained as historical planning context.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a private Blackboard iCalendar URL import path that imports all selected calendars into MemoFlow with preview, deduplication, recurrence handling, and explicit errors.

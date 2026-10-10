@@ -1,10 +1,11 @@
 import { parseLocalIso } from '../domain/reminders';
-import type { BlackboardItem, BlackboardItemType, ImportCandidate, ScheduleCandidate } from '../domain/types';
+import type { BlackboardItem, BlackboardItemType, BlackboardSourceKind, ImportCandidate, ScheduleCandidate } from '../domain/types';
 import { parseScheduleTime } from '../domain/schedule';
 
 export interface RawBlackboardItem {
   externalId?: string | null; courseName?: string | null; courseCode?: string | null; title?: string | null;
   itemType?: string | null; dueAt?: string | null; sourceUrl?: string | null;
+  sourceKind?: BlackboardSourceKind | null;
   recurrenceRule?: string | null;
 }
 const typeMap: Record<string, BlackboardItemType> = {
@@ -32,15 +33,37 @@ function normalizeRecurrenceRule(value: string | null | undefined): string | nul
   const frequency = rule.match(/(?:^|;)FREQ=(DAILY|WEEKLY|MONTHLY)(?:;|$)/)?.[1];
   return frequency ? `FREQ=${frequency}` : null;
 }
+export function normalizeCourseCode(courseName: string | null | undefined, courseCode: string | null | undefined): string | null {
+  const explicit = courseCode?.trim();
+  if (explicit) return explicit;
+  const name = courseName?.trim() ?? '';
+  const prefix = name.split(':', 1)[0]?.trim() ?? '';
+  if (name.includes(':') && prefix) return prefix;
+  return /^[A-Za-z]{2,}\s*\d{3,}[A-Za-z0-9-]*$/.test(name) ? name : null;
+}
+export function classifyBlackboardSource(value: string | null | undefined): BlackboardSourceKind {
+  if (!value) return 'unknown';
+  try {
+    const url = new URL(value);
+    const path = url.pathname.toLowerCase();
+    if (path.includes('/webapps/assignment/uploadassignment') && url.searchParams.get('content_id') && url.searchParams.get('course_id')) return 'assignment';
+    if (url.hostname.toLowerCase() === 'bb.cuhk.edu.cn' && path.includes('/calendar/event/')) return 'event';
+  } catch { /* invalid sources are kept for diagnostics but never treated as assignments */ }
+  return 'unknown';
+}
 export function normalizeExternalItem(raw: RawBlackboardItem): BlackboardItem {
   const recurrence = raw.recurrenceRule === undefined ? {} : { recurrenceRule: normalizeRecurrenceRule(raw.recurrenceRule) };
-  return { externalId: raw.externalId?.trim() || null, courseName: raw.courseName?.trim() || '未命名课程', courseCode: raw.courseCode?.trim() || null, title: raw.title?.trim() || '未命名项目', itemType: normalizeType(raw.itemType), dueAt: normalizeDueAt(raw.dueAt), sourceUrl: raw.sourceUrl?.trim() || '', ...recurrence };
+  const sourceUrl = raw.sourceUrl?.trim() || '';
+  const sourceKind = raw.sourceKind ?? undefined;
+  const courseName = raw.courseName?.trim() || '未命名课程';
+  return { externalId: raw.externalId?.trim() || null, courseName, courseCode: normalizeCourseCode(courseName, raw.courseCode), title: raw.title?.trim() || '未命名项目', itemType: normalizeType(raw.itemType), dueAt: normalizeDueAt(raw.dueAt), sourceUrl, ...(sourceKind ? { sourceKind } : {}), ...recurrence };
 }
 
 export interface RawScheduleEntry {
   externalId?: string | null; courseName?: string | null; courseCode?: string | null;
   weekday?: string | number | null; startTime?: string | null; endTime?: string | null;
   location?: string | null; sourceUrl?: string | null;
+  startDate?: string | null; endDate?: string | null; recurrenceRule?: string | null;
 }
 
 const weekdayMap: Record<string, number> = {
@@ -69,6 +92,9 @@ export function normalizeScheduleEntry(raw: RawScheduleEntry): ScheduleCandidate
     endTime,
     location: raw.location?.trim() || null,
     sourceUrl: raw.sourceUrl?.trim() || '',
+    ...(raw.startDate?.trim() ? { startDate: raw.startDate.trim() } : {}),
+    ...(raw.endDate?.trim() ? { endDate: raw.endDate.trim() } : {}),
+    ...(raw.recurrenceRule?.trim() ? { recurrenceRule: raw.recurrenceRule.trim() } : {}),
   };
 }
 export function stableImportKey(item: Pick<BlackboardItem, 'externalId' | 'sourceUrl' | 'courseName' | 'courseCode' | 'title' | 'itemType'>): string | null {

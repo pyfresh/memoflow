@@ -34,12 +34,29 @@ describe('parseIcalFeed', () => {
     expect(result.schedules).toEqual([expect.objectContaining({
       externalId: 'class-math-1@bb.cuhk.edu.cn',
       courseName: 'MATH 101',
+      courseCode: 'MATH 101',
       weekday: 2,
       startTime: '09:00',
       endTime: '10:30',
       location: 'YIA LT6',
+      startDate: '2026-10-06',
+      endDate: undefined,
+      recurrenceRule: 'FREQ=WEEKLY',
       sourceUrl: 'https://bb.cuhk.edu.cn/ultra/courses/math',
     })]);
+  });
+
+  it('preserves a weekly course term range from RRULE COUNT', () => {
+    const recurring = `BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:class-air-1\nSUMMARY:AIR5212 - Introduction to Haptics\nDTSTART;TZID=Asia/Shanghai:20260907T140000\nDTEND;TZID=Asia/Shanghai:20260907T165000\nRRULE:FREQ=WEEKLY;COUNT=15;BYDAY=MO\nLOCATION:Teaching D Bldg 102\nEND:VEVENT\nEND:VCALENDAR`;
+    expect(parseIcalFeed(recurring, feedUrl).schedules[0]).toMatchObject({
+      courseCode: 'AIR5212',
+      weekday: 1,
+      startTime: '14:00',
+      endTime: '16:50',
+      startDate: '2026-09-07',
+      endDate: '2026-12-14',
+      recurrenceRule: 'FREQ=WEEKLY',
+    });
   });
 
   it('rejects non-calendar input', () => {
@@ -57,5 +74,11 @@ DESCRIPTION:First line\n
 END:VEVENT
 END:VCALENDAR`;
     expect(parseIcalFeed(folded, feedUrl).items[0].localMemoContent).toBe('First line\nsecond line');
+  });
+
+  it('prefers an assignment URL embedded in the event description over a portal URL', () => {
+    const withAssignmentLink = `BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:assignment-link\nSUMMARY:Assignment 1 - Xili\nDTEND:20261008T235900\nDESCRIPTION:<a href="/webapps/assignment/uploadAssignment?content_id=_671598_1&amp;course_id=_18493_1&amp;group_id=&amp;mode=view">Assignment 1 - Xili</a>\nURL:https://bb.cuhk.edu.cn/webapps/portal/execute/tabs/tabAction?tab_tab_group_id=_1_1\nCATEGORIES:assignment\nEND:VEVENT\nEND:VCALENDAR`;
+    expect(parseIcalFeed(withAssignmentLink, feedUrl).items[0].sourceUrl)
+      .toBe('https://bb.cuhk.edu.cn/webapps/assignment/uploadAssignment?content_id=_671598_1&course_id=_18493_1&group_id=&mode=view');
   });
 });

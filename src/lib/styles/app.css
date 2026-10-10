@@ -34,6 +34,7 @@
 .tag { display:inline-flex; border-radius:5px; padding:3px 6px; background:var(--accent-soft); color:var(--accent-strong); font-size:.65rem; font-weight:700; }
 .tag.course { background:#fff0e9; color:#b85c3c; }
 .tag.done { background:#edf7f1; color:var(--success); }
+.recent-tags { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:5px; }
 .empty-state { padding:28px 18px; color:var(--ink-muted); font-size:.82rem; line-height:1.55; text-align:center; }
 .overlay { position:fixed; inset:0; z-index:20; display:grid; place-items:center; padding:28px; background:rgba(15,31,35,.42); backdrop-filter:blur(6px); }
 .modal { width:min(720px,100%); max-height:calc(100vh - 56px); overflow:auto; border:1px solid var(--line); border-radius:12px; padding:26px; background:var(--surface); box-shadow:var(--shadow-lg); }

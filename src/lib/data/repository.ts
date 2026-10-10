@@ -1,5 +1,7 @@
-import { advanceReminderOccurrence, parseLocalIso } from '../domain/reminders';
-import type { BlackboardItem, CourseScheduleEntry, ImportCandidate, Memo, Reminder, ReminderStatus, ScheduleCandidate } from '../domain/types';
+import { advanceReminderOccurrence, parseLocalIso, shiftLocalDays } from '../domain/reminders';
+import type { BlackboardItem, BlackboardSourceKind, Countdown, CourseScheduleEntry, CourseScheduleSource, ImportCandidate, Memo, NotificationChannel, NotificationSettings, Reminder, ReminderDeliveryState, ReminderStatus, ScheduleCandidate } from '../domain/types';
+import { advanceCountdown } from '../domain/countdowns';
+import { normalizeCourseCode } from '../import/normalize';
 
 export interface StorageLike {
   getItem(key: string): string | null;
@@ -18,21 +20,24 @@ export interface ExternalMapping {
 export interface AppSnapshot {
   memos: Memo[]; reminders: Reminder[]; blackboardItems: BlackboardItem[];
   courseSchedules?: CourseScheduleEntry[];
+  countdowns?: Countdown[];
   syncRuns?: SyncRun[]; externalMappings?: ExternalMapping[];
+  notificationSettings?: NotificationSettings;
 }
 export interface MemoDraft {
   standalone?: boolean;
   id?: string; title: string; body: string; reminderAt: string; recurrenceRule: string | null;
   categoryId?: string | null; tags?: string[]; source?: 'manual' | 'blackboard';
-  externalItemId?: string | null; sourceUrl?: string | null;
+  externalItemId?: string | null; sourceUrl?: string | null; sourceKind?: BlackboardSourceKind;
 }
 export interface ReminderDraft {
-  id?: string; title: string; dueAt: string; recurrenceRule: string | null; memoId?: string | null;
+  id?: string; title: string; dueAt: string; recurrenceRule: string | null; memoId?: string | null; notificationAt?: string | null;
 }
 export interface SavedMemo extends Memo { reminderId: string | null; }
 export interface ImportResult { newCount: number; updatedCount: number; existingCount: number; errorCount: number; }
 export interface ScheduleImportResult { newCount: number; updatedCount: number; existingCount: number; }
 export interface DemoSeedResult { addedMemos: number; addedReminders: number; addedBlackboardItems: number; addedSchedules: number; }
+export interface CountdownDraft { name: string; totalSeconds: number; }
 export interface PersistenceDriver { load(): Promise<AppSnapshot>; save(snapshot: AppSnapshot): Promise<void>; }
 
 export class RepositoryCorruptionError extends Error {
@@ -60,7 +65,34 @@ export function normalizeLocalDateTime(value: string): string {
   parseLocalIso(local);
   return `${local}+08:00`;
 }
-function defaultSnapshot(): AppSnapshot { return { memos: [], reminders: [], blackboardItems: [], courseSchedules: [], syncRuns: [], externalMappings: [] }; }
+export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = { pushplusEnabled: false, pushplusToken: '' };
+export function emptyReminderDelivery(): ReminderDeliveryState { return { nativeSentAt: null, pushplusSentAt: null, pushplusLastError: null }; }
+function snapshotNotificationRequired(settings?: NotificationSettings): boolean {
+  return settings?.pushplusEnabled === true && Boolean(settings.pushplusToken?.trim());
+}
+function isEarlyBlackboardType(itemType: string | null | undefined): boolean {
+  return itemType === 'assignment' || itemType === 'project';
+}
+function blackboardNotificationAt(dueAt: string, itemType: string | null | undefined): string | undefined {
+  return isEarlyBlackboardType(itemType) ? shiftLocalDays(dueAt, -1) : undefined;
+}
+function linkedBlackboardItem(snapshot: AppSnapshot, memo: Memo | undefined): BlackboardItem | undefined {
+  if (!memo || memo.source !== 'blackboard') return undefined;
+  return snapshot.blackboardItems.find((item) =>
+    (memo.externalItemId && item.externalId === memo.externalItemId)
+    || (memo.sourceUrl && item.sourceUrl === memo.sourceUrl)
+  );
+}
+function reminderUsesEarlyBlackboardNotification(snapshot: AppSnapshot, reminder: Reminder): boolean {
+  const memo = snapshot.memos.find((item) => item.id === reminder.memoId);
+  const item = linkedBlackboardItem(snapshot, memo);
+  return isEarlyBlackboardType(item?.itemType) || memo?.sourceKind === 'assignment';
+}
+function needsEarlyNotificationMigration(input: Partial<AppSnapshot>): boolean {
+  if (!Array.isArray(input.memos) || !Array.isArray(input.reminders) || !Array.isArray(input.blackboardItems)) return false;
+  return input.reminders.some((reminder) => !reminder.notificationAt && reminderUsesEarlyBlackboardNotification(input as AppSnapshot, reminder));
+}
+function defaultSnapshot(): AppSnapshot { return { memos: [], reminders: [], blackboardItems: [], courseSchedules: [], countdowns: [], syncRuns: [], externalMappings: [], notificationSettings: { ...DEFAULT_NOTIFICATION_SETTINGS } }; }
 function requireString(value: unknown, path: string): string {
   if (typeof value !== 'string') throw new RepositoryCorruptionError(`Invalid snapshot field ${path}`);
   return value;
@@ -77,12 +109,41 @@ function validateSnapshot(input: unknown): AppSnapshot {
   for (const reminder of parsed.reminders) {
     if (!reminder || typeof reminder !== 'object') throw new RepositoryCorruptionError('Invalid reminder record');
     requireString(reminder.id, 'reminders[].id'); requireString(reminder.dueAt, 'reminders[].dueAt'); parseLocalIso(reminder.dueAt);
+    if (reminder.notificationAt !== undefined) {
+      if (typeof reminder.notificationAt !== 'string') throw new RepositoryCorruptionError('Invalid reminder notificationAt');
+      parseLocalIso(reminder.notificationAt);
+    }
+    reminder.delivery = {
+      ...emptyReminderDelivery(),
+      ...(reminder.delivery ?? {}),
+    };
   }
+  for (const reminder of parsed.reminders) {
+    if (!reminder.notificationAt && reminderUsesEarlyBlackboardNotification(parsed as AppSnapshot, reminder)) {
+      reminder.notificationAt = shiftLocalDays(reminder.dueAt, -1);
+    }
+  }
+  const countdowns = Array.isArray(parsed.countdowns) ? parsed.countdowns : [];
+  for (const countdown of countdowns) {
+    if (!countdown || typeof countdown !== 'object') throw new RepositoryCorruptionError('Invalid countdown record');
+    requireString(countdown.id, 'countdowns[].id'); requireString(countdown.name, 'countdowns[].name');
+    requireString(countdown.createdAt, 'countdowns[].createdAt'); requireString(countdown.updatedAt, 'countdowns[].updatedAt');
+    if (!Number.isInteger(countdown.totalSeconds) || countdown.totalSeconds <= 0 || !Number.isInteger(countdown.remainingSeconds) || countdown.remainingSeconds < 0 || countdown.remainingSeconds > countdown.totalSeconds) throw new RepositoryCorruptionError('Invalid countdown duration');
+    if (!['idle', 'running', 'paused', 'completed'].includes(countdown.status)) throw new RepositoryCorruptionError('Invalid countdown status');
+    countdown.notificationSentAt = typeof countdown.notificationSentAt === 'string' ? countdown.notificationSentAt : null;
+    countdown.delivery = { ...emptyReminderDelivery(), ...(countdown.delivery ?? {}) };
+  }
+  const notificationSettings = parsed.notificationSettings;
   return {
     memos: parsed.memos as Memo[], reminders: parsed.reminders as Reminder[], blackboardItems: parsed.blackboardItems as BlackboardItem[],
     courseSchedules: Array.isArray(parsed.courseSchedules) ? parsed.courseSchedules as CourseScheduleEntry[] : [],
+    countdowns: countdowns as Countdown[],
     syncRuns: Array.isArray(parsed.syncRuns) ? parsed.syncRuns as SyncRun[] : [],
     externalMappings: Array.isArray(parsed.externalMappings) ? parsed.externalMappings as ExternalMapping[] : [],
+    notificationSettings: {
+      pushplusEnabled: notificationSettings?.pushplusEnabled === true,
+      pushplusToken: typeof notificationSettings?.pushplusToken === 'string' ? notificationSettings.pushplusToken : '',
+    },
   };
 }
 function stableExternalKey(item: Pick<BlackboardItem, 'externalId' | 'sourceUrl' | 'courseName' | 'courseCode' | 'title' | 'itemType'>): string | null {
@@ -100,13 +161,34 @@ function stableScheduleKey(item: Pick<ScheduleCandidate, 'externalId' | 'courseN
 function sameKey(a: BlackboardItem, b: BlackboardItem): boolean {
   const left = stableExternalKey(a); const right = stableExternalKey(b); return left !== null && left === right;
 }
+function sameUnidentifiedItem(a: BlackboardItem, b: BlackboardItem): boolean {
+  if (a.externalId || b.externalId) return false;
+  return a.title.trim().toLowerCase() === b.title.trim().toLowerCase()
+    && a.courseName.trim().toLowerCase() === b.courseName.trim().toLowerCase()
+    && a.itemType === b.itemType;
+}
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character] ?? character));
 }
-function remoteMemoBody(courseName: string, itemType: string, sourceUrl: string, description?: string): string {
-  const href = sourceUrl ? `<a href="${escapeHtml(sourceUrl)}">打开 Blackboard 项目</a>` : '';
+function remoteMemoBody(courseName: string, itemType: string, _sourceUrl: string, description?: string): string {
   const body = description?.trim() ? `<p>${escapeHtml(description.trim()).replace(/\r?\n/g, '<br>')}</p>` : `<p>${escapeHtml(itemType)}</p>`;
-  return `<p><strong>${escapeHtml(courseName)}</strong></p>${body}<p>${href}</p>`;
+  return `<p><strong>${escapeHtml(courseName)}</strong></p>${body}`;
+}
+function uniqueTags(tags: string[]): string[] {
+  return [...new Set(tags.map((tag) => tag.trim()).filter(Boolean))];
+}
+function blackboardTags(item: Pick<BlackboardItem, 'courseName' | 'courseCode' | 'itemType'>): string[] {
+  return uniqueTags([item.itemType, normalizeCourseCode(item.courseName, item.courseCode) ?? '']);
+}
+function mergeBlackboardTags(current: string[], previous: BlackboardItem, candidate: ImportCandidate): string[] {
+  const previousGenerated = uniqueTags([
+    previous.itemType,
+    previous.courseCode ?? '',
+    normalizeCourseCode(previous.courseName, previous.courseCode) ?? '',
+    previous.courseName,
+  ]);
+  if (!previousGenerated.some((tag) => current.includes(tag))) return uniqueTags(current);
+  return uniqueTags([...current.filter((tag) => !previousGenerated.includes(tag)), ...blackboardTags(candidate)]);
 }
 function isLegacyBlackboardPlaceholder(item: BlackboardItem): boolean {
   const sourceUrl = item.sourceUrl.trim().toLowerCase();
@@ -136,18 +218,22 @@ export class LocalRepository {
   load(): AppSnapshot {
     const raw = this.storage.getItem(STORAGE_KEY); if (!raw) return defaultSnapshot();
     try {
-      const snapshot = validateSnapshot(JSON.parse(raw));
-      if (removeLegacyBlackboardPlaceholders(snapshot)) this.write(snapshot);
+      const parsed = JSON.parse(raw) as Partial<AppSnapshot>;
+      const notificationMigration = needsEarlyNotificationMigration(parsed);
+      const snapshot = validateSnapshot(parsed);
+      if (notificationMigration || removeLegacyBlackboardPlaceholders(snapshot)) this.write(snapshot);
       return snapshot;
     }
     catch (error) { if (error instanceof RepositoryCorruptionError) throw error; throw new RepositoryCorruptionError(`Unable to parse snapshot: ${String(error)}`); }
   }
   async loadAsync(): Promise<AppSnapshot> {
     if (!this.driver) return this.load();
-    const snapshot = validateSnapshot(await this.driver.load());
+    const raw = await this.driver.load();
+    const notificationMigration = needsEarlyNotificationMigration(raw);
+    const snapshot = validateSnapshot(raw);
     const migrated = removeLegacyBlackboardPlaceholders(snapshot);
     this.write(snapshot);
-    if (migrated) await this.driver.save(snapshot);
+    if (notificationMigration || migrated) await this.driver.save(snapshot);
     return snapshot;
   }
   private write(snapshot: AppSnapshot): void { this.storage.setItem(STORAGE_KEY, JSON.stringify(snapshot)); }
@@ -169,9 +255,13 @@ export class LocalRepository {
       ...(draft.tags !== undefined ? { tags: [...draft.tags] } : {}),
     }); else snapshot.memos.unshift(memo);
 
+    const linkedBlackboard = linkedBlackboardItem(snapshot, memo);
+    const earlyNotificationAt = draft.reminderAt && (isEarlyBlackboardType(linkedBlackboard?.itemType) || draft.sourceKind === 'assignment')
+      ? shiftLocalDays(normalizeLocalDateTime(draft.reminderAt), -1)
+      : undefined;
     let reminderId: string | null = snapshot.reminders.find((item) => item.memoId === memoId)?.id ?? null;
     if (draft.reminderAt) {
-      const reminder = this.saveReminderDraft({ id: reminderId ?? undefined, title: draft.title.trim(), dueAt: draft.reminderAt, recurrenceRule: draft.recurrenceRule, memoId }, snapshot, timestamp);
+      const reminder = this.saveReminderDraft({ id: reminderId ?? undefined, title: draft.title.trim(), dueAt: draft.reminderAt, recurrenceRule: draft.recurrenceRule, memoId, notificationAt: earlyNotificationAt ?? (linkedBlackboard ? null : undefined) }, snapshot, timestamp);
       reminderId = reminder.id;
     } else if (reminderId) { snapshot.reminders = snapshot.reminders.filter((item) => item.id !== reminderId); reminderId = null; }
     this.write(snapshot); return { ...memo, reminderId };
@@ -182,10 +272,16 @@ export class LocalRepository {
     const dueAt = normalizeLocalDateTime(draft.dueAt); const snapshot = existingSnapshot ?? this.load();
     const existing = draft.id ? snapshot.reminders.find((item) => item.id === draft.id) : undefined;
     const reminder: Reminder = existing ?? {
-      id: createId('reminder'), memoId: draft.memoId ?? null, title: draft.title.trim(), dueAt, recurrenceRule: draft.recurrenceRule, status: 'pending', notificationSentAt: null,
-      recurrenceAnchorAt: dueAt, occurrenceHistory: [], createdAt: timestamp, updatedAt: timestamp,
+      id: createId('reminder'), memoId: draft.memoId ?? null, title: draft.title.trim(), dueAt, ...(draft.notificationAt ? { notificationAt: draft.notificationAt } : {}), recurrenceRule: draft.recurrenceRule, status: 'pending', notificationSentAt: null,
+      delivery: emptyReminderDelivery(), recurrenceAnchorAt: dueAt, occurrenceHistory: [], createdAt: timestamp, updatedAt: timestamp,
     };
-    if (existing) Object.assign(existing, { title: draft.title.trim(), dueAt, recurrenceRule: draft.recurrenceRule, memoId: draft.memoId ?? existing.memoId, notificationSentAt: null, status: 'pending', recurrenceAnchorAt: existing.recurrenceAnchorAt ?? dueAt, updatedAt: timestamp });
+    if (existing) {
+      Object.assign(existing, { title: draft.title.trim(), dueAt, recurrenceRule: draft.recurrenceRule, memoId: draft.memoId ?? existing.memoId, notificationSentAt: null, delivery: emptyReminderDelivery(), status: 'pending', recurrenceAnchorAt: existing.recurrenceAnchorAt ?? dueAt, updatedAt: timestamp });
+      if (draft.notificationAt !== undefined) {
+        if (draft.notificationAt) existing.notificationAt = draft.notificationAt;
+        else delete existing.notificationAt;
+      }
+    }
     else snapshot.reminders.push(reminder);
     if (!existingSnapshot) this.write(snapshot); return reminder;
   }
@@ -194,7 +290,8 @@ export class LocalRepository {
     const snapshot = this.load(); const reminder = snapshot.reminders.find((item) => item.id === reminderId); if (!reminder) return;
     if (reminder.recurrenceRule && (status === 'completed' || status === 'ignored')) {
       reminder.occurrenceHistory = [...(reminder.occurrenceHistory ?? []), { at: reminder.dueAt, status }];
-      reminder.dueAt = advanceReminderOccurrence(reminder); reminder.status = 'pending'; reminder.notificationSentAt = null;
+      reminder.dueAt = advanceReminderOccurrence(reminder); reminder.status = 'pending'; reminder.notificationSentAt = null; reminder.delivery = emptyReminderDelivery();
+      if (reminderUsesEarlyBlackboardNotification(snapshot, reminder)) reminder.notificationAt = shiftLocalDays(reminder.dueAt, -1);
     } else reminder.status = status;
     reminder.updatedAt = nowIso(); this.write(snapshot);
   }
@@ -209,6 +306,69 @@ export class LocalRepository {
     const snapshot = this.load(); snapshot.reminders = snapshot.reminders.filter((reminder) => reminder.id !== id); snapshot.externalMappings = (snapshot.externalMappings ?? []).filter((mapping) => mapping.reminderId !== id); this.write(snapshot);
   }
 
+  createCountdown(draft: CountdownDraft, timestamp = nowIso()): Countdown {
+    const name = draft.name.trim();
+    if (!name) throw new Error('倒计时名称不能为空');
+    if (!Number.isInteger(draft.totalSeconds) || draft.totalSeconds <= 0) throw new Error('倒计时至少需要 1 秒');
+    const snapshot = this.load();
+    const countdown: Countdown = {
+      id: createId('countdown'), name, totalSeconds: draft.totalSeconds, remainingSeconds: draft.totalSeconds,
+      status: 'idle', notificationSentAt: null, delivery: emptyReminderDelivery(), createdAt: timestamp, updatedAt: timestamp,
+    };
+    snapshot.countdowns ??= [];
+    snapshot.countdowns.unshift(countdown);
+    this.write(snapshot);
+    return countdown;
+  }
+
+  updateCountdown(id: string, updates: Partial<Pick<Countdown, 'name' | 'status'>>): void {
+    const snapshot = this.load(); const countdown = snapshot.countdowns?.find((item) => item.id === id); if (!countdown) return;
+    if (updates.name !== undefined) { const name = updates.name.trim(); if (!name) throw new Error('倒计时名称不能为空'); countdown.name = name; }
+    if (updates.status !== undefined) countdown.status = updates.status;
+    countdown.updatedAt = nowIso();
+    this.write(snapshot);
+  }
+
+  advanceCountdowns(elapsedSeconds = 1, timestamp = nowIso()): Countdown[] {
+    if (!Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) return this.load().countdowns ?? [];
+    const snapshot = this.load(); snapshot.countdowns ??= [];
+    for (const countdown of snapshot.countdowns) {
+      if (countdown.status !== 'running') continue;
+      Object.assign(countdown, advanceCountdown(countdown, elapsedSeconds, timestamp));
+    }
+    this.write(snapshot);
+    return snapshot.countdowns;
+  }
+
+  resetCountdown(id: string): void {
+    const snapshot = this.load(); const countdown = snapshot.countdowns?.find((item) => item.id === id); if (!countdown) return;
+    countdown.remainingSeconds = countdown.totalSeconds; countdown.status = 'idle'; countdown.notificationSentAt = null; countdown.delivery = emptyReminderDelivery(); countdown.updatedAt = nowIso();
+    this.write(snapshot);
+  }
+
+  deleteCountdown(id: string): void {
+    const snapshot = this.load(); snapshot.countdowns = (snapshot.countdowns ?? []).filter((item) => item.id !== id); this.write(snapshot);
+  }
+
+  listCountdowns(): Countdown[] { return this.load().countdowns ?? []; }
+
+  markCountdownNotificationChannelSent(id: string, channel: NotificationChannel, sentAt: string): void {
+    const snapshot = this.load(); const countdown = snapshot.countdowns?.find((item) => item.id === id); if (!countdown) return;
+    countdown.delivery = { ...emptyReminderDelivery(), ...(countdown.delivery ?? {}) };
+    if (channel === 'native') countdown.delivery.nativeSentAt = sentAt;
+    if (channel === 'pushplus') { countdown.delivery.pushplusSentAt = sentAt; countdown.delivery.pushplusLastError = null; }
+    const pushplusRequired = Boolean(snapshotNotificationRequired(snapshot.notificationSettings));
+    if ((channel === 'pushplus' && countdown.delivery.pushplusSentAt) || (channel === 'native' && countdown.delivery.nativeSentAt && (!pushplusRequired || countdown.delivery.pushplusSentAt))) countdown.notificationSentAt = sentAt;
+    countdown.updatedAt = sentAt; this.write(snapshot);
+  }
+
+  markCountdownNotificationChannelFailed(id: string, channel: NotificationChannel, error: string): void {
+    const snapshot = this.load(); const countdown = snapshot.countdowns?.find((item) => item.id === id); if (!countdown) return;
+    countdown.delivery = { ...emptyReminderDelivery(), ...(countdown.delivery ?? {}) };
+    if (channel === 'pushplus') countdown.delivery.pushplusLastError = error;
+    countdown.notificationSentAt = null; countdown.updatedAt = nowIso(); this.write(snapshot);
+  }
+
   importBlackboardItems(candidates: ImportCandidate[]): ImportResult {
     const snapshot = this.load(); snapshot.syncRuns ??= []; snapshot.externalMappings ??= []; const startedAt = nowIso(); const result: ImportResult = { newCount: 0, updatedCount: 0, existingCount: 0, errorCount: 0 };
     removeLegacyBlackboardPlaceholders(snapshot);
@@ -217,20 +377,51 @@ export class LocalRepository {
       try { parseLocalIso(candidate.dueAt); } catch { result.errorCount += 1; continue; }
       const key = stableExternalKey(candidate); if (!key) { result.errorCount += 1; continue; }
       const mapping = (snapshot.externalMappings ?? []).find((item) => item.key === key || (item.sourceUrl && candidate.sourceUrl && item.sourceUrl.toLowerCase() === candidate.sourceUrl.toLowerCase()));
-      const existing = mapping ? snapshot.blackboardItems.find((item) => item.id === mapping.externalId || sameKey(item, candidate)) : snapshot.blackboardItems.find((item) => sameKey(item, candidate));
+      const existing = mapping
+        ? snapshot.blackboardItems.find((item) => item.id === mapping.externalId || sameKey(item, candidate))
+        : snapshot.blackboardItems.find((item) => sameKey(item, candidate) || sameUnidentifiedItem(item, candidate));
       if (existing) {
-        const oldTitle = existing.title; const dueChanged = existing.dueAt !== candidate.dueAt; const recurrenceChanged = (existing.recurrenceRule ?? null) !== (candidate.recurrenceRule ?? null); const changed = oldTitle !== candidate.title || dueChanged || recurrenceChanged;
+        const previousItem = { ...existing };
+        const oldTitle = existing.title; const oldSourceUrl = existing.sourceUrl; const dueChanged = existing.dueAt !== candidate.dueAt; const recurrenceChanged = (existing.recurrenceRule ?? null) !== (candidate.recurrenceRule ?? null); const sourceChanged = oldSourceUrl !== candidate.sourceUrl; const changed = oldTitle !== candidate.title || dueChanged || recurrenceChanged || sourceChanged;
         Object.assign(existing, { externalId: candidate.externalId, courseName: candidate.courseName, courseCode: candidate.courseCode, title: candidate.title, itemType: candidate.itemType, dueAt: candidate.dueAt, recurrenceRule: candidate.recurrenceRule ?? null, sourceUrl: candidate.sourceUrl, lastSeenAt: nowIso(), syncStatus: changed ? 'updated' : 'existing' });
-        const memo = mapping?.memoId ? snapshot.memos.find((item) => item.id === mapping.memoId) : snapshot.memos.find((item) => item.source === 'blackboard' && ((candidate.externalId && item.externalItemId === candidate.externalId) || (!candidate.externalId && item.sourceUrl === candidate.sourceUrl)));
+        const memo = mapping?.memoId
+          ? snapshot.memos.find((item) => item.id === mapping.memoId)
+          : snapshot.memos.find((item) => item.source === 'blackboard' && (
+            (candidate.externalId && item.externalItemId === candidate.externalId)
+            || (!candidate.externalId && (item.sourceUrl === candidate.sourceUrl || item.sourceUrl === oldSourceUrl))
+          ));
         const reminder = mapping?.reminderId ? snapshot.reminders.find((item) => item.id === mapping.reminderId) : memo ? snapshot.reminders.find((item) => item.memoId === memo.id) : undefined;
-        if (memo) { if (memo.title === oldTitle) memo.title = candidate.title; memo.updatedAt = nowIso(); }
-        if (reminder) { if (reminder.title === oldTitle) reminder.title = candidate.title; reminder.dueAt = candidate.dueAt; reminder.recurrenceRule = candidate.recurrenceRule ?? null; reminder.recurrenceAnchorAt ??= candidate.dueAt; if (dueChanged || recurrenceChanged) { reminder.notificationSentAt = null; reminder.status = 'pending'; } reminder.updatedAt = nowIso(); }
-        if (mapping) Object.assign(mapping, { key, externalId: candidate.externalId, sourceUrl: candidate.sourceUrl, updatedAt: nowIso() }); else (snapshot.externalMappings ??= []).push({ key, externalId: candidate.externalId, sourceUrl: candidate.sourceUrl, memoId: memo?.id ?? null, reminderId: reminder?.id ?? null, updatedAt: nowIso() });
+        if (memo) {
+          if (memo.title === oldTitle) memo.title = candidate.title;
+          memo.tags = mergeBlackboardTags(memo.tags, previousItem, candidate);
+          memo.sourceUrl = candidate.sourceUrl;
+          memo.sourceKind = candidate.sourceKind;
+          memo.externalItemId = candidate.externalId;
+          memo.updatedAt = nowIso();
+        }
+        if (reminder) {
+          if (reminder.title === oldTitle) reminder.title = candidate.title;
+          const nextNotificationAt = blackboardNotificationAt(candidate.dueAt, candidate.itemType);
+          const notificationChanged = (reminder.notificationAt ?? null) !== (nextNotificationAt ?? null);
+          reminder.dueAt = candidate.dueAt;
+          if (nextNotificationAt) reminder.notificationAt = nextNotificationAt;
+          else delete reminder.notificationAt;
+          reminder.recurrenceRule = candidate.recurrenceRule ?? null;
+          reminder.recurrenceAnchorAt ??= candidate.dueAt;
+          if (dueChanged || recurrenceChanged || notificationChanged) { reminder.notificationSentAt = null; reminder.delivery = emptyReminderDelivery(); reminder.status = 'pending'; }
+          reminder.updatedAt = nowIso();
+        }
+        if (mapping) Object.assign(mapping, { key, externalId: candidate.externalId, sourceUrl: candidate.sourceUrl, updatedAt: nowIso() });
+        else {
+          const oldMapping = (snapshot.externalMappings ?? []).find((item) => (existing && item.externalId === existing.id) || (memo && item.memoId === memo.id));
+          if (oldMapping) Object.assign(oldMapping, { key, externalId: candidate.externalId, sourceUrl: candidate.sourceUrl, updatedAt: nowIso() });
+          else (snapshot.externalMappings ??= []).push({ key, externalId: candidate.externalId, sourceUrl: candidate.sourceUrl, memoId: memo?.id ?? null, reminderId: reminder?.id ?? null, updatedAt: nowIso() });
+        }
         if (changed) result.updatedCount += 1; else result.existingCount += 1; continue;
       }
       const timestamp = nowIso(); const memoId = createId('memo'); const reminderId = createId('reminder');
-      const memo: Memo = { id: memoId, title: candidate.title, richText: remoteMemoBody(candidate.courseName, candidate.itemType, candidate.sourceUrl, candidate.localMemoContent), categoryId: 'course', tags: [candidate.itemType, candidate.courseCode ?? candidate.courseName], source: 'blackboard', externalItemId: candidate.externalId, sourceUrl: candidate.sourceUrl, createdAt: timestamp, updatedAt: timestamp };
-      snapshot.memos.unshift(memo); snapshot.reminders.push({ id: reminderId, memoId, title: candidate.title, dueAt: candidate.dueAt, recurrenceRule: candidate.recurrenceRule ?? null, status: 'pending', notificationSentAt: null, recurrenceAnchorAt: candidate.dueAt, occurrenceHistory: [], createdAt: timestamp, updatedAt: timestamp });
+      const memo: Memo = { id: memoId, title: candidate.title, richText: remoteMemoBody(candidate.courseName, candidate.itemType, candidate.sourceUrl, candidate.localMemoContent), categoryId: 'course', tags: blackboardTags(candidate), source: 'blackboard', externalItemId: candidate.externalId, sourceUrl: candidate.sourceUrl, sourceKind: candidate.sourceKind, createdAt: timestamp, updatedAt: timestamp };
+      snapshot.memos.unshift(memo); snapshot.reminders.push({ id: reminderId, memoId, title: candidate.title, dueAt: candidate.dueAt, ...(blackboardNotificationAt(candidate.dueAt, candidate.itemType) ? { notificationAt: blackboardNotificationAt(candidate.dueAt, candidate.itemType) } : {}), recurrenceRule: candidate.recurrenceRule ?? null, status: 'pending', notificationSentAt: null, delivery: emptyReminderDelivery(), recurrenceAnchorAt: candidate.dueAt, occurrenceHistory: [], createdAt: timestamp, updatedAt: timestamp });
       snapshot.blackboardItems.push({ ...candidate, id: key, lastSeenAt: timestamp, syncStatus: 'new' }); snapshot.externalMappings.push({ key, externalId: candidate.externalId, memoId, reminderId, sourceUrl: candidate.sourceUrl, updatedAt: timestamp }); result.newCount += 1;
     }
     if (candidates.length > 0) {
@@ -299,7 +490,7 @@ export class LocalRepository {
     return { addedMemos, addedReminders, addedBlackboardItems, addedSchedules };
   }
 
-  importBlackboardSchedules(candidates: ScheduleCandidate[]): ScheduleImportResult {
+  importCourseSchedules(candidates: ScheduleCandidate[], source: CourseScheduleSource = 'archive'): ScheduleImportResult {
     const snapshot = this.load();
     snapshot.courseSchedules ??= [];
     const result: ScheduleImportResult = { newCount: 0, updatedCount: 0, existingCount: 0 };
@@ -307,22 +498,46 @@ export class LocalRepository {
       const key = stableScheduleKey(candidate);
       const existing = snapshot.courseSchedules.find((item) => stableScheduleKey(item) === key);
       if (existing) {
-        const changed = existing.courseName !== candidate.courseName || existing.courseCode !== candidate.courseCode || existing.weekday !== candidate.weekday || existing.startTime !== candidate.startTime || existing.endTime !== candidate.endTime || existing.location !== candidate.location || existing.sourceUrl !== candidate.sourceUrl;
+        const changed = existing.courseName !== candidate.courseName || existing.courseCode !== candidate.courseCode || existing.weekday !== candidate.weekday || existing.startTime !== candidate.startTime || existing.endTime !== candidate.endTime || existing.location !== candidate.location || existing.sourceUrl !== candidate.sourceUrl || existing.startDate !== candidate.startDate || existing.endDate !== candidate.endDate || existing.recurrenceRule !== candidate.recurrenceRule || existing.source !== source;
         if (changed) {
-          Object.assign(existing, candidate, { updatedAt: nowIso() });
+          Object.assign(existing, candidate, { source, updatedAt: nowIso() });
           result.updatedCount += 1;
         } else result.existingCount += 1;
         continue;
       }
       const timestamp = nowIso();
-      snapshot.courseSchedules.push({ ...candidate, id: `schedule_${candidate.externalId ?? createId('course')}`, source: 'blackboard', createdAt: timestamp, updatedAt: timestamp });
+      snapshot.courseSchedules.push({ ...candidate, id: `schedule_${candidate.externalId ?? createId('course')}`, source, createdAt: timestamp, updatedAt: timestamp });
       result.newCount += 1;
     }
     this.write(snapshot);
     return result;
   }
+  importBlackboardSchedules(candidates: ScheduleCandidate[]): ScheduleImportResult {
+    return this.importCourseSchedules(candidates, 'blackboard');
+  }
   listReminders(): Reminder[] { return this.load().reminders; }
-  markNotificationSent(id: string, sentAt: string): void { const snapshot = this.load(); const reminder = snapshot.reminders.find((item) => item.id === id); if (!reminder) return; reminder.notificationSentAt = sentAt; reminder.updatedAt = sentAt; this.write(snapshot); }
+  getNotificationSettings(): NotificationSettings { return { ...(this.load().notificationSettings ?? DEFAULT_NOTIFICATION_SETTINGS) }; }
+  saveNotificationSettings(settings: NotificationSettings): void {
+    const snapshot = this.load();
+    snapshot.notificationSettings = { pushplusEnabled: settings.pushplusEnabled === true, pushplusToken: settings.pushplusToken.trim() };
+    this.write(snapshot);
+  }
+  markNotificationChannelSent(id: string, channel: NotificationChannel, sentAt: string): void {
+    const snapshot = this.load(); const reminder = snapshot.reminders.find((item) => item.id === id); if (!reminder) return;
+    reminder.delivery = { ...emptyReminderDelivery(), ...(reminder.delivery ?? {}) };
+    if (channel === 'native') reminder.delivery.nativeSentAt = sentAt;
+    if (channel === 'pushplus') { reminder.delivery.pushplusSentAt = sentAt; reminder.delivery.pushplusLastError = null; }
+    const pushplusRequired = Boolean(snapshotNotificationRequired(snapshot.notificationSettings));
+    if (reminder.delivery.nativeSentAt && (!pushplusRequired || reminder.delivery.pushplusSentAt)) reminder.notificationSentAt = sentAt;
+    reminder.updatedAt = sentAt; this.write(snapshot);
+  }
+  markNotificationChannelFailed(id: string, channel: NotificationChannel, error: string): void {
+    const snapshot = this.load(); const reminder = snapshot.reminders.find((item) => item.id === id); if (!reminder) return;
+    reminder.delivery = { ...emptyReminderDelivery(), ...(reminder.delivery ?? {}) };
+    if (channel === 'pushplus') reminder.delivery.pushplusLastError = error;
+    reminder.notificationSentAt = null; reminder.updatedAt = nowIso(); this.write(snapshot);
+  }
+  markNotificationSent(id: string, sentAt: string): void { this.markNotificationChannelSent(id, 'native', sentAt); }
   clear(): void { this.storage.removeItem?.(STORAGE_KEY); }
 }
 export function createBrowserRepository(driver?: PersistenceDriver): LocalRepository {

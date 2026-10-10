@@ -1,5 +1,7 @@
 # Blackboard iCalendar 导入设计
 
+> 状态：已废弃。产品已收敛为登录 Blackboard 后从课程日历页面导入；保留此文件作为历史设计记录，不代表当前版本提供 iCalendar 入口。
+
 ## 目标
 
 MemoFlow 支持从 Blackboard 生成的私有 iCalendar Feed 导入当前勾选的全部日历内容，包括 Institution、Personal 和课程日历。用户完成一次链接粘贴和读取后，可以在预览页确认批量导入。

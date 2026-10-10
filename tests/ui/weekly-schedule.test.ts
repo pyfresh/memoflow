@@ -15,13 +15,30 @@ describe('WeeklySchedule', () => {
 
     expect(screen.getByRole('region', { name: '周课表' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /2026 年 9 月 28 日/ })).toBeInTheDocument();
-    expect(screen.getAllByRole('region')).toHaveLength(8);
+    expect(screen.getAllByRole('region')).toHaveLength(6);
+    expect(screen.getByText('时间')).toBeInTheDocument();
+    expect(screen.getByText('周一')).toBeInTheDocument();
     expect(screen.getByText('MATH 101')).toBeInTheDocument();
     expect(screen.getByText('09:00 - 10:30')).toBeInTheDocument();
+    expect(screen.getByText('MATH 101').closest('article')).toHaveStyle('top: 20px; height: 60px');
   });
 
-  it('shows an empty state when Blackboard has no course schedule rows', () => {
+  it('offers ZIP import and explains the empty state', () => {
     render(WeeklySchedule, { weekStart: new Date(2026, 8, 28), entries: [] });
-    expect(screen.getByText('同步 Blackboard 后，这里会显示你的每周课程。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '导入课表 ZIP' })).toBeInTheDocument();
+    expect(screen.getByText('导入课表 ZIP 后，这里会显示你的每周课程。')).toBeInTheDocument();
+  });
+
+  it('hides a course outside its imported term range', () => {
+    render(WeeklySchedule, {
+      weekStart: new Date(2026, 8, 28),
+      entries: [{
+        id: 'schedule-future', courseName: 'Future Course', courseCode: 'FUTURE101', weekday: 2,
+        startTime: '09:00', endTime: '10:00', location: 'Room 1', source: 'archive', externalId: 'future-1',
+        sourceUrl: 'archive://future.ics', startDate: '2026-10-05', endDate: '2026-12-14', recurrenceRule: 'FREQ=WEEKLY',
+        createdAt: '2026-09-01T00:00:00+08:00', updatedAt: '2026-09-01T00:00:00+08:00',
+      }],
+    });
+    expect(screen.queryByText('Future Course')).not.toBeInTheDocument();
   });
 });

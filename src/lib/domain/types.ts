@@ -1,5 +1,32 @@
 export type ReminderStatus = 'pending' | 'completed' | 'ignored';
 export type BlackboardItemType = 'assignment' | 'project' | 'exam' | 'event' | 'other';
+export type BlackboardSourceKind = 'assignment' | 'event' | 'unknown';
+export type CourseScheduleSource = 'archive' | 'blackboard';
+export type NotificationChannel = 'native' | 'pushplus';
+export type CountdownStatus = 'idle' | 'running' | 'paused' | 'completed';
+
+export interface NotificationSettings {
+  pushplusEnabled: boolean;
+  pushplusToken: string;
+}
+
+export interface ReminderDeliveryState {
+  nativeSentAt: string | null;
+  pushplusSentAt: string | null;
+  pushplusLastError: string | null;
+}
+
+export interface Countdown {
+  id: string;
+  name: string;
+  totalSeconds: number;
+  remainingSeconds: number;
+  status: CountdownStatus;
+  notificationSentAt: string | null;
+  delivery?: ReminderDeliveryState;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface Memo {
   id: string;
@@ -10,6 +37,7 @@ export interface Memo {
   source: 'manual' | 'blackboard';
   externalItemId: string | null;
   sourceUrl: string | null;
+  sourceKind?: BlackboardSourceKind;
   createdAt: string;
   updatedAt: string;
 }
@@ -24,9 +52,12 @@ export interface Reminder {
   memoId: string | null;
   title: string;
   dueAt: string;
+  /** When the notification should fire; falls back to dueAt for ordinary reminders. */
+  notificationAt?: string;
   recurrenceRule: string | null;
   status: ReminderStatus;
   notificationSentAt: string | null;
+  delivery?: ReminderDeliveryState;
   recurrenceAnchorAt?: string;
   occurrenceHistory?: ReminderOccurrence[];
   createdAt: string;
@@ -43,6 +74,7 @@ export interface BlackboardItem {
   dueAt: string | null;
   recurrenceRule?: string | null;
   sourceUrl: string;
+  sourceKind?: BlackboardSourceKind;
   lastSeenAt?: string;
   lastPayloadHash?: string;
   syncStatus?: 'new' | 'updated' | 'existing' | 'not-found' | 'needs-review';
@@ -56,9 +88,12 @@ export interface CourseScheduleEntry {
   startTime: string;
   endTime: string;
   location: string | null;
-  source: 'blackboard';
+  source: CourseScheduleSource;
   externalId: string | null;
   sourceUrl: string;
+  startDate?: string;
+  endDate?: string;
+  recurrenceRule?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -72,6 +107,9 @@ export interface ScheduleCandidate {
   endTime: string;
   location: string | null;
   sourceUrl: string;
+  startDate?: string;
+  endDate?: string;
+  recurrenceRule?: string | null;
 }
 
 export interface ImportCandidate extends BlackboardItem {
@@ -91,6 +129,15 @@ export interface CalendarCell {
 
 export interface CalendarItem { id: string; date: string; title: string; kind: 'course' | 'reminder' | 'note'; time?: string; }
 export interface RecentItem {
-  searchText?: string; id: string; memoId: string; title: string; dueAt: string | null; source: 'manual' | 'blackboard'; status: ReminderStatus; category: string; }
+  searchText?: string;
+  id: string;
+  memoId: string;
+  title: string;
+  dueAt: string | null;
+  source: 'manual' | 'blackboard';
+  status: ReminderStatus;
+  category: string;
+  tags?: string[];
+}
 
 

@@ -1,4 +1,5 @@
 import type { ImportCandidate, ScheduleCandidate } from '../domain/types';
+import { findBlackboardAssignmentUrl } from './blackboard';
 import { dedupeImportCandidates, normalizeExternalItem } from './normalize';
 
 export interface IcalParseResult {
@@ -84,12 +85,14 @@ function firstValue(properties: Map<string, IcalProperty>, names: string[]): str
   return '';
 }
 
-function inferCourseName(properties: Map<string, IcalProperty>): string {
+function inferCourseName(properties: Map<string, IcalProperty>, title: string): string {
   const calendar = firstValue(properties, ['X-BB-CALENDAR-NAME', 'X-WR-CALNAME']);
   if (calendar && !genericCalendars.has(calendar.toLowerCase())) return calendar;
   const categories = firstValue(properties, ['CATEGORIES']).split(',').map((part) => part.trim()).filter(Boolean);
   const course = categories.find((part) => !genericCalendars.has(part.toLowerCase()) && !/^(assignment|homework|project|exam|test|event|personal|institution)$/i.test(part));
-  return course || calendar || categories[0] || 'Blackboard 课程';
+  if (course || calendar || categories[0]) return course || calendar || categories[0];
+  const titleCourse = title.match(/^([A-Z]{2,}\s?\d{3,})\s*[-–—:]\s*(.+)$/i);
+  return titleCourse ? `${titleCourse[1]} - ${titleCourse[2]}` : 'Blackboard 课程';
 }
 
 function inferCourseCode(courseName: string, properties: Map<string, IcalProperty>): string | null {
@@ -116,6 +119,17 @@ function scheduleDay(properties: Map<string, IcalProperty>, start: string): numb
 
 function timePart(value: string): string { return value.slice(11, 16); }
 
+function addDaysToIsoDate(value: string, days: number): string {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
+function weeklyEndDate(startDate: string, recurrenceRule: string): string | undefined {
+  const count = recurrenceRule.match(/(?:^|;)COUNT=(\d+)(?:;|$)/i)?.[1];
+  if (!count) return undefined;
+  return addDaysToIsoDate(startDate, Math.max(0, Number(count) - 1) * 7);
+}
+
 export function parseIcalFeed(input: string, feedUrl: string): IcalParseResult {
   const lines = unfold(input);
   if (!lines.some((line) => /^BEGIN:VCALENDAR$/i.test(line))) throw new Error('不是有效的 iCalendar 内容');
@@ -130,9 +144,13 @@ export function parseIcalFeed(input: string, feedUrl: string): IcalParseResult {
     const title = firstValue(properties, ['SUMMARY']);
     const dueAt = parseDate(properties.get('DUE')) ?? parseDate(properties.get('DTEND')) ?? parseDate(properties.get('DTSTART'));
     if (!uid || !title || !dueAt) { skippedCount += 1; return; }
-    const courseName = inferCourseName(properties);
+    const courseName = inferCourseName(properties, title);
     const courseCode = inferCourseCode(courseName, properties);
-    const eventUrl = firstValue(properties, ['URL']) || `https://bb.cuhk.edu.cn/calendar/event/${encodeURIComponent(uid)}`;
+    const description = firstValue(properties, ['DESCRIPTION']);
+    const listedUrl = firstValue(properties, ['URL']);
+    const eventUrl = findBlackboardAssignmentUrl(description, listedUrl || feedUrl, title)
+      || listedUrl
+      || `https://bb.cuhk.edu.cn/calendar/event/${encodeURIComponent(uid)}`;
     const candidate = normalizeExternalItem({
       externalId: uid,
       courseName,
@@ -143,7 +161,7 @@ export function parseIcalFeed(input: string, feedUrl: string): IcalParseResult {
       recurrenceRule: firstValue(properties, ['RRULE']),
       sourceUrl: eventUrl,
     }) as ImportCandidate;
-    candidate.localMemoContent = firstValue(properties, ['DESCRIPTION']) || undefined;
+    candidate.localMemoContent = description || undefined;
     items.push(candidate);
 
     const recurrence = candidate.recurrenceRule;
@@ -152,7 +170,19 @@ export function parseIcalFeed(input: string, feedUrl: string): IcalParseResult {
     const lowerCourse = courseName.trim().toLowerCase();
     if (recurrence === 'FREQ=WEEKLY' && start && end && courseName && !genericCalendars.has(lowerCourse)) {
       const weekday = scheduleDay(properties, start);
-      if (weekday) schedules.push({ externalId: uid, courseName, courseCode, weekday, startTime: timePart(start), endTime: timePart(end), location: firstValue(properties, ['LOCATION']) || null, sourceUrl: eventUrl });
+      if (weekday) schedules.push({
+        externalId: uid,
+        courseName,
+        courseCode,
+        weekday,
+        startTime: timePart(start),
+        endTime: timePart(end),
+        location: firstValue(properties, ['LOCATION']) || null,
+        sourceUrl: eventUrl,
+        startDate: start.slice(0, 10),
+        endDate: weeklyEndDate(start.slice(0, 10), firstValue(properties, ['RRULE'])),
+        recurrenceRule: recurrence,
+      });
     }
   };
 

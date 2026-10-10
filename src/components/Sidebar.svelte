@@ -7,6 +7,7 @@
   const dispatch = createEventDispatcher<{
     navigate: View;
     importBlackboard: void;
+    openNotificationSettings: void;
     seedDemoData: void;
     exportData: void;
     exportPlainText: void;
@@ -17,6 +18,7 @@
     { id: 'memos', icon: '▤', label: '备忘录' },
     { id: 'reminders', icon: '◷', label: '提醒' },
     { id: 'schedule', icon: '▥', label: '周课表' },
+    { id: 'countdown', icon: '◌', label: '倒计时' },
   ];
 </script>
 
@@ -32,7 +34,8 @@
   </nav>
 
   <div class="sidebar-bottom">
-    <button class="sidebar-action" type="button" on:click={() => dispatch('importBlackboard')}>⌁　同步 Blackboard</button>
+    <button class="sidebar-action" type="button" on:click={() => dispatch('importBlackboard')}>⌁　从 Blackboard 导入作业</button>
+    <button class="sidebar-action" type="button" on:click={() => dispatch('openNotificationSettings')}>◉　通知设置</button>
     <button class="sidebar-action" type="button" on:click={() => dispatch('seedDemoData')}>✦　加载示例数据</button>
     <button class="sidebar-action" type="button" on:click={() => dispatch('exportData')}>↓　导出 Markdown</button>
     <button class="sidebar-action" type="button" on:click={() => dispatch('exportPlainText')}>↓　导出纯文本</button>

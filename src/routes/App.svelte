@@ -1,22 +1,27 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import BlackboardImportDialog from '../components/BlackboardImportDialog.svelte';
+  import CourseScheduleImportDialog from '../components/CourseScheduleImportDialog.svelte';
+  import CountdownPage from '../components/CountdownPage.svelte';
   import MemoList from '../components/MemoList.svelte';
   import MonthCalendar from '../components/MonthCalendar.svelte';
+  import NotificationSettings from '../components/NotificationSettings.svelte';
   import RecentItems from '../components/RecentItems.svelte';
   import ReminderEditor from '../components/ReminderEditor.svelte';
   import Sidebar from '../components/Sidebar.svelte';
   import WeeklySchedule from '../components/WeeklySchedule.svelte';
   import type { View } from '$lib/domain/navigation';
-  import type { BlackboardCapturePayload, CalendarItem, Memo, RecentItem } from '$lib/domain/types';
+  import type { BlackboardCapturePayload, CalendarItem, Countdown, Memo, NotificationSettings as NotificationSettingsType, RecentItem, ScheduleCandidate } from '$lib/domain/types';
   import type { MemoDraft } from '$lib/data/repository';
   import { createBrowserRepository, type AppSnapshot } from '$lib/data/repository';
   import { getReminderOccurrences } from '$lib/domain/reminders';
   import { startOfWeek } from '$lib/domain/schedule';
   import { startReminderScheduler } from '$lib/reminders/scheduler';
-  import { notifyReminder } from '$lib/notifications';
+  import { notifyCountdown, notifyReminder } from '$lib/notifications';
+  import { sendPushPlusReminder } from '$lib/notifications/pushplus';
   import { createDesktopPersistenceDriver } from '$lib/data/desktop';
   import { exportMemosToMarkdown, exportMemosToPlainText } from '$lib/export/markdown';
+  import { classifyBlackboardSource, normalizeCourseCode } from '$lib/import/normalize';
 
   const desktopPersistence = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window ? createDesktopPersistenceDriver() : undefined;
   const repository = createBrowserRepository(desktopPersistence);
@@ -27,9 +32,16 @@
   let query = '';
   let showEditor = false;
   let showImporter = false;
+  let showScheduleImporter = false;
+  let showNotificationSettings = false;
   let seedMessage = '';
+  let syncMessage = '';
+  let scheduleMessage = '';
   let editingDraft: Partial<MemoDraft> = {};
   let editingId: string | null = null;
+  let editingReminderId: string | null = null;
+  let notificationSettings: NotificationSettingsType = repository.getNotificationSettings();
+  const countdownNotificationsInFlight = new Set<string>();
 
   let allReminderItems: RecentItem[] = [];
   let filteredReminderItems: RecentItem[] = [];
@@ -50,6 +62,20 @@
     return '生活';
   }
 
+  function blackboardRecentTags(memo: Memo | undefined): string[] {
+    if (!memo || memo.source !== 'blackboard') return [];
+
+    const item = snapshot.blackboardItems.find((candidate) =>
+      (memo.externalItemId && candidate.externalId === memo.externalItemId)
+      || (memo.sourceUrl && candidate.sourceUrl === memo.sourceUrl),
+    );
+    const typeTags = new Set(['assignment', 'project', 'exam', 'event', 'other']);
+    const itemType = item?.itemType ?? memo.tags.find((tag) => typeTags.has(tag.toLowerCase()));
+    const courseCode = normalizeCourseCode(item?.courseName, item?.courseCode)
+      ?? memo.tags.find((tag) => /^[A-Za-z]{2,}\s*\d{3,}[A-Za-z0-9-]*$/.test(tag));
+    return [...new Set([itemType, courseCode].filter((tag): tag is string => Boolean(tag)))];
+  }
+
   $: allReminderItems = snapshot.reminders
     .map((reminder): RecentItem => {
       const memo = snapshot.memos.find((item) => item.id === reminder.memoId);
@@ -62,6 +88,7 @@
         source: memo?.source ?? 'manual',
         status: reminder.status,
         category: memoCategory(memo),
+        tags: blackboardRecentTags(memo),
         searchText: [title, memo?.richText ?? '', memo?.tags?.join(' ') ?? ''].join(' '),
       };
     })
@@ -97,6 +124,7 @@
 
   function refresh() {
     snapshot = repository.load();
+    notificationSettings = repository.getNotificationSettings();
   }
 
   function navigate(event: CustomEvent<View>) {
@@ -106,12 +134,14 @@
 
   function openNewMemo() {
     editingId = null;
+    editingReminderId = null;
     editingDraft = {};
     showEditor = true;
   }
 
   function openNewReminder() {
     editingId = null;
+    editingReminderId = null;
     editingDraft = { standalone: true };
     showEditor = true;
   }
@@ -119,9 +149,12 @@
   function editMemo(memo: Memo) {
     const reminder = snapshot.reminders.find((item) => item.memoId === memo.id);
     editingId = memo.id;
+    editingReminderId = reminder?.id ?? null;
     editingDraft = {
       title: memo.title,
       body: memo.richText,
+      sourceUrl: memo.sourceUrl,
+      sourceKind: memo.sourceKind,
       categoryId: memo.categoryId,
       tags: memo.tags,
       reminderAt: reminder?.dueAt.slice(0, 16) ?? '',
@@ -140,17 +173,35 @@
     }
     if (!reminder) return;
     editingId = null;
+    editingReminderId = reminder.id;
     editingDraft = { standalone: true, title: reminder.title, reminderAt: reminder.dueAt.slice(0, 16), recurrenceRule: reminder.recurrenceRule };
     showEditor = true;
   }
 
   function saveMemo(event: CustomEvent<MemoDraft>) {
     if (event.detail.standalone) {
-      const existingReminder = editingId ? snapshot.reminders.find((item) => item.id === editingId) : undefined;
+      const existingReminder = editingReminderId ? snapshot.reminders.find((item) => item.id === editingReminderId) : undefined;
       repository.saveReminderDraft({ id: existingReminder?.id, title: event.detail.title, dueAt: event.detail.reminderAt, recurrenceRule: event.detail.recurrenceRule, memoId: null });
     } else {
       repository.saveMemoDraft({ ...event.detail, id: editingId ?? undefined });
     }
+    showEditor = false;
+    refresh();
+    void repository.flush();
+  }
+
+  function completeEditorItem(event: CustomEvent<{ memoId: string | null; reminderId: string | null }>) {
+    if (!event.detail.reminderId) return;
+    repository.setReminderStatus(event.detail.reminderId, 'completed');
+    showEditor = false;
+    refresh();
+    void repository.flush();
+  }
+
+  function deleteEditorItem(event: CustomEvent<{ memoId: string | null; reminderId: string | null }>) {
+    if (event.detail.memoId) repository.deleteMemo(event.detail.memoId);
+    else if (event.detail.reminderId) repository.deleteReminder(event.detail.reminderId);
+    else return;
     showEditor = false;
     refresh();
     void repository.flush();
@@ -171,10 +222,103 @@
     showImporter = true;
   }
 
+  function handleScheduleImport() {
+    showScheduleImporter = true;
+  }
+
+  function handleNotificationSettings() {
+    showNotificationSettings = true;
+  }
+
+  function saveNotificationSettings(event: CustomEvent<NotificationSettingsType>) {
+    repository.saveNotificationSettings(event.detail);
+    refresh();
+    showNotificationSettings = false;
+    void repository.flush();
+  }
+
+  function createCountdown(event: CustomEvent<{ name: string; totalSeconds: number }>) {
+    repository.createCountdown(event.detail);
+    refresh();
+    void repository.flush();
+  }
+
+  function changeCountdown(event: CustomEvent<{ id: string; status: 'running' | 'paused' }>) {
+    repository.updateCountdown(event.detail.id, { status: event.detail.status });
+    refresh();
+    void repository.flush();
+  }
+
+  function resetCountdown(event: CustomEvent<string>) {
+    repository.resetCountdown(event.detail);
+    refresh();
+    void repository.flush();
+  }
+
+  function deleteCountdown(event: CustomEvent<string>) {
+    repository.deleteCountdown(event.detail);
+    refresh();
+    void repository.flush();
+  }
+
+  async function notifyCompletedCountdown(countdown: Countdown) {
+    if (countdownNotificationsInFlight.has(countdown.id)) return;
+    countdownNotificationsInFlight.add(countdown.id);
+    try {
+      const result = await notifyCountdown(countdown, notificationSettings);
+      const sentAt = new Date().toISOString();
+      for (const channel of ['native', 'pushplus'] as const) {
+        const outcome = result[channel];
+        if (!outcome) continue;
+        if (outcome.sent) repository.markCountdownNotificationChannelSent(countdown.id, channel, sentAt);
+        else if (outcome.error) repository.markCountdownNotificationChannelFailed(countdown.id, channel, outcome.error);
+      }
+      refresh();
+      await repository.flush();
+    } finally {
+      countdownNotificationsInFlight.delete(countdown.id);
+    }
+  }
+
+  function syncCompletedCountdowns() {
+    for (const countdown of repository.listCountdowns()) {
+      if (countdown.status === 'completed' && !countdown.notificationSentAt) void notifyCompletedCountdown(countdown);
+    }
+  }
+
+  function tickCountdowns(lastTickAt: { value: number }) {
+    const now = Date.now();
+    const elapsedSeconds = Math.max(1, Math.floor((now - lastTickAt.value) / 1000));
+    lastTickAt.value = now;
+    repository.advanceCountdowns(elapsedSeconds);
+    refresh();
+    syncCompletedCountdowns();
+  }
+
+  async function testPushPlus(token: string) {
+    const now = new Date().toISOString();
+    await sendPushPlusReminder({
+      id: 'test-notification', memoId: null, title: 'MemoFlow 测试提醒', dueAt: now,
+      recurrenceRule: null, status: 'pending', notificationSentAt: null,
+      createdAt: now, updatedAt: now,
+    }, token, undefined, 'test');
+  }
+
   function confirmImport(event: CustomEvent<BlackboardCapturePayload>) {
-    repository.importBlackboardItems(event.detail.items);
-    repository.importBlackboardSchedules(event.detail.schedules);
+    const itemResult = repository.importBlackboardItems(event.detail.items);
+    const unresolvedCount = event.detail.items.filter((item) => (item.sourceKind ?? classifyBlackboardSource(item.sourceUrl)) !== 'assignment').length;
+    const parts = [`新增 ${itemResult.newCount}`, `更新 ${itemResult.updatedCount}`, `已存在 ${itemResult.existingCount}`];
+    if (itemResult.errorCount) parts.push(`失败 ${itemResult.errorCount}`);
+    syncMessage = `Blackboard 作业导入完成：${parts.join('，')}。${unresolvedCount ? ` ${unresolvedCount} 个事项尚未定位到作业提交页。` : '作业链接已完成校验。'}`;
     showImporter = false;
+    refresh();
+    void repository.flush();
+  }
+
+  function confirmScheduleImport(event: CustomEvent<{ schedules: ScheduleCandidate[] }>) {
+    const result = repository.importCourseSchedules(event.detail.schedules, 'archive');
+    scheduleMessage = `课表导入完成：新增 ${result.newCount}，更新 ${result.updatedCount}，已存在 ${result.existingCount}。`;
+    showScheduleImporter = false;
     refresh();
     void repository.flush();
   }
@@ -213,18 +357,28 @@
   }
 
   function closeImporterFromBackdrop(event: MouseEvent) {
-    if (event.target === event.currentTarget) showImporter = false;
+    if (event.target !== event.currentTarget) return;
+    showImporter = false;
+    showScheduleImporter = false;
   }
 
   onMount(() => {
     let stop: (() => void) | undefined;
+    const lastCountdownTickAt = { value: Date.now() };
+    const countdownTimer = window.setInterval(() => tickCountdowns(lastCountdownTickAt), 1000);
     const initialize = async () => {
       if (desktopPersistence) await repository.loadAsync();
       refresh();
-      stop = startReminderScheduler(repository, (reminder) => { void notifyReminder(reminder); });
+      stop = startReminderScheduler(repository, (reminder) => {
+        const memo = snapshot.memos.find((item) => item.id === reminder.memoId);
+        const item = memo?.source === 'blackboard'
+          ? snapshot.blackboardItems.find((candidate) => candidate.externalId === memo.externalItemId || candidate.sourceUrl === memo.sourceUrl)
+          : undefined;
+        return notifyReminder(reminder, notificationSettings, { courseCode: item?.courseCode ?? undefined, itemType: item?.itemType ?? undefined });
+      });
     };
     void initialize();
-    return () => stop?.();
+    return () => { stop?.(); window.clearInterval(countdownTimer); };
   });
 </script>
 
@@ -237,10 +391,12 @@
 
 <div class="app-shell">
   <h1 class="sr-only">MemoFlow</h1>
-  <Sidebar activeView={activeView} on:navigate={navigate} on:importBlackboard={handleImport} on:seedDemoData={seedDemoData} on:exportData={exportData} on:exportPlainText={exportPlainText} />
+  <Sidebar activeView={activeView} on:navigate={navigate} on:importBlackboard={handleImport} on:openNotificationSettings={handleNotificationSettings} on:seedDemoData={seedDemoData} on:exportData={exportData} on:exportPlainText={exportPlainText} />
 
   <main class="workspace">
     {#if seedMessage}<p class="seed-feedback" role="status" aria-live="polite">{seedMessage}</p>{/if}
+    {#if syncMessage}<p class="sync-feedback" role="status" aria-live="polite">{syncMessage}</p>{/if}
+    {#if scheduleMessage}<p class="sync-feedback" role="status" aria-live="polite">{scheduleMessage}</p>{/if}
     {#if activeView === 'overview'}
       <header class="workspace-header">
         <div>
@@ -259,7 +415,9 @@
         <MonthCalendar month={currentMonth} items={calendarItems} on:monthChange={(event) => (currentMonth = event.detail)} on:select={selectCalendarItem} />
       </section>
     {:else if activeView === 'schedule'}
-      <WeeklySchedule entries={snapshot.courseSchedules ?? []} weekStart={currentWeek} on:weekChange={(event) => (currentWeek = event.detail)} />
+      <WeeklySchedule entries={snapshot.courseSchedules ?? []} weekStart={currentWeek} on:weekChange={(event) => (currentWeek = event.detail)} on:importZip={handleScheduleImport} />
+    {:else if activeView === 'countdown'}
+      <CountdownPage countdowns={snapshot.countdowns ?? []} on:create={createCountdown} on:change={changeCountdown} on:reset={resetCountdown} on:delete={deleteCountdown} />
     {:else if activeView === 'memos'}
       <header class="workspace-header page-header">
         <div>
@@ -295,15 +453,31 @@
 {#if showEditor}
   <div class="overlay" role="presentation" on:click={closeEditorFromBackdrop}>
     <div class="modal" role="dialog" aria-modal="true" aria-label="编辑备忘录">
-      <ReminderEditor initial={editingDraft} on:save={saveMemo} on:cancel={() => (showEditor = false)} />
+      <ReminderEditor initial={editingDraft} existingMemoId={editingId} existingReminderId={editingReminderId} on:save={saveMemo} on:complete={completeEditorItem} on:delete={deleteEditorItem} on:cancel={() => (showEditor = false)} />
     </div>
   </div>
 {/if}
 
 {#if showImporter}
   <div class="overlay" role="presentation" on:click={closeImporterFromBackdrop}>
-    <div class="modal" role="dialog" aria-modal="true" aria-label="导入 Blackboard">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="从 Blackboard 导入作业">
       <BlackboardImportDialog on:close={() => (showImporter = false)} on:confirm={confirmImport} />
+    </div>
+  </div>
+{/if}
+
+{#if showScheduleImporter}
+  <div class="overlay" role="presentation" on:click={closeImporterFromBackdrop}>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="导入课表 ZIP">
+      <CourseScheduleImportDialog on:close={() => (showScheduleImporter = false)} on:confirm={confirmScheduleImport} />
+    </div>
+  </div>
+{/if}
+
+{#if showNotificationSettings}
+  <div class="overlay" role="presentation" on:click={(event) => event.target === event.currentTarget && (showNotificationSettings = false)}>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="通知设置">
+      <NotificationSettings settings={notificationSettings} on:save={saveNotificationSettings} on:cancel={() => (showNotificationSettings = false)} onTest={testPushPlus} />
     </div>
   </div>
 {/if}
@@ -312,4 +486,5 @@
   .page-header { margin-bottom:28px; }
   .single-panel { max-width:820px; }
   .seed-feedback { margin:0 0 16px; color:var(--accent-strong); font-size:.78rem; font-weight:650; }
+  .sync-feedback { margin:0 0 16px; border:1px solid var(--accent-soft); border-radius:8px; padding:10px 12px; background:var(--surface-tint); color:var(--accent-strong); font-size:.78rem; font-weight:650; }
 </style>

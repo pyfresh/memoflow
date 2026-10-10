@@ -20,6 +20,27 @@ describe('normalizeExternalItem', () => {
     });
   });
 
+  it('prefers an explicit course code over the course name prefix', () => {
+    expect(normalizeExternalItem({
+      courseName: 'AIS6002:Science Foundation for Generative Model_01',
+      courseCode: 'AIS6002-OVERRIDE',
+      title: 'Homework 1',
+      itemType: 'Assignment',
+      dueAt: '2026-10-08 23:59',
+      sourceUrl: 'https://bb.cuhk.edu.cn/item/43',
+    }).courseCode).toBe('AIS6002-OVERRIDE');
+  });
+
+  it('extracts a course code from the Blackboard course name when the field is missing', () => {
+    expect(normalizeExternalItem({
+      courseName: 'AIS6002:Science Foundation for Generative Model_01',
+      title: 'Homework 1',
+      itemType: 'Assignment',
+      dueAt: '2026-10-08 23:59',
+      sourceUrl: 'https://bb.cuhk.edu.cn/item/44',
+    }).courseCode).toBe('AIS6002');
+  });
+
   it('keeps supported recurrence frequencies and clears unsupported rules', () => {
     expect(normalizeExternalItem({ title: 'Weekly', dueAt: '2026-10-08 09:00', recurrenceRule: 'DTSTART=20261008;FREQ=WEEKLY', sourceUrl: 'https://bb.cuhk.edu.cn/item/weekly' })).toMatchObject({ recurrenceRule: 'FREQ=WEEKLY' });
     expect(normalizeExternalItem({ title: 'Hourly', dueAt: '2026-10-08 09:00', recurrenceRule: 'FREQ=HOURLY', sourceUrl: 'https://bb.cuhk.edu.cn/item/hourly' }).recurrenceRule).toBeNull();

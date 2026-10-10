@@ -1,18 +1,57 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import ReminderEditor from '../../src/components/ReminderEditor.svelte';
 
+const { openUrlMock } = vi.hoisted(() => ({ openUrlMock: vi.fn() }));
+vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: openUrlMock }));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+});
+
 describe('ReminderEditor', () => {
-  it('renders existing rich text as formatted content instead of showing HTML tags', () => {
+  it('shows colored complete and delete actions for an existing item', async () => {
+    const onComplete = vi.fn();
+    const onDelete = vi.fn();
+    render(ReminderEditor, {
+      onSave: vi.fn(), onComplete, onDelete, existingMemoId: 'memo-1', existingReminderId: 'reminder-1',
+    });
+
+    const complete = screen.getByRole('button', { name: '完成' });
+    const remove = screen.getByRole('button', { name: '删除' });
+    expect(complete).toHaveClass('complete-action');
+    expect(remove).toHaveClass('delete-action');
+
+    await fireEvent.click(complete);
+    await fireEvent.click(remove);
+    expect(onComplete).toHaveBeenCalledWith({ memoId: 'memo-1', reminderId: 'reminder-1' });
+    expect(onDelete).toHaveBeenCalledWith({ memoId: 'memo-1', reminderId: 'reminder-1' });
+  });
+
+  it('does not show complete or delete actions for a new item', () => {
+    render(ReminderEditor, { onSave: vi.fn() });
+    expect(screen.queryByRole('button', { name: '完成' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '删除' })).not.toBeInTheDocument();
+  });
+
+  it('renders the Blackboard source action outside the rich-text body', () => {
     render(ReminderEditor, {
       onSave: vi.fn(),
-      initial: { title: 'Homework', body: '<p><strong>Blackboard 课程</strong></p><p><a href="https://bb.cuhk.edu.cn">打开 Blackboard 项目</a></p>' },
+      initial: { title: 'Homework', sourceUrl: 'https://bb.cuhk.edu.cn/webapps/assignment/uploadAssignment?content_id=_1&course_id=_2', sourceKind: 'assignment', body: '<p><strong>Blackboard 课程</strong></p>' },
     });
 
     const body = screen.getByLabelText('正文');
     expect(body).toHaveTextContent('Blackboard 课程');
-    expect(body).toHaveTextContent('打开 Blackboard 项目');
+    expect(body).not.toHaveTextContent('打开作业');
     expect(body).not.toHaveTextContent('<p>');
+    expect(screen.getByRole('button', { name: '↗ 打开作业' })).toBeInTheDocument();
+  });
+
+  it('does not offer an assignment action for an unresolved event link', () => {
+    render(ReminderEditor, { onSave: vi.fn(), initial: { title: 'Assignment', sourceUrl: 'https://bb.cuhk.edu.cn/calendar/event/one', sourceKind: 'event', body: '<p>assignment</p>' } });
+    expect(screen.queryByRole('button', { name: '↗ 打开作业' })).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('尚未定位到作业提交页');
   });
 
   it('emits a memo with a reminder when the user submits the form', async () => {

@@ -26,7 +26,7 @@ export function formatLocalIso(parts: LocalDateTimeParts): string {
   return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}T${pad(parts.hour)}:${pad(parts.minute)}:${pad(parts.second)}+08:00`;
 }
 
-function shiftLocalDays(value: string, days: number): string {
+export function shiftLocalDays(value: string, days: number): string {
   const parts = parseLocalIso(value);
   const shifted = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days, parts.hour, parts.minute, parts.second));
   return formatLocalIso({
