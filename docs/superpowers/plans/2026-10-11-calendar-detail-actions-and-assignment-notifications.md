@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add colored complete/delete actions to calendar item details and notify for imported Blackboard assignments one day before their deadline.
+**Goal:** Add colored complete/delete actions to calendar item details and notify for imported Blackboard assignments and projects one day before their deadline.
 
-**Architecture:** Keep the existing `ReminderEditor` modal and repository APIs. Pass explicit memo and reminder IDs into the editor, dispatch complete/delete events to `App.svelte`, and reuse repository status/deletion methods. Add an optional persisted `notificationAt` to reminders; imported assignments set it to the deadline minus one local day, while the scheduler uses it when present and falls back to `dueAt` for all other reminders.
+**Architecture:** Keep the existing `ReminderEditor` modal and repository APIs. Pass explicit memo and reminder IDs into the editor, dispatch complete/delete events to `App.svelte`, and reuse repository status/deletion methods. Add an optional persisted `notificationAt` to reminders; imported assignments and projects set it to the deadline minus one local day, while the scheduler uses it when present and falls back to `dueAt` for all other reminders.
 
 **Tech Stack:** Svelte, TypeScript, Vitest, existing local repository and reminder scheduler.
 
@@ -29,7 +29,7 @@ Expected: FAIL because `Reminder` does not yet accept or use `notificationAt`.
 
 - [ ] **Step 3: Write the failing repository import test**
 
-Add a test in `tests/store/repository.test.ts` that imports an `itemType: 'assignment'` due at `2026-10-08T23:59:00+08:00` and asserts the created reminder has `notificationAt: '2026-10-07T23:59:00+08:00'`. Import a `project` in the same test and assert its reminder has no `notificationAt`.
+Add a test in `tests/store/repository.test.ts` that imports an `itemType: 'assignment'` and an `itemType: 'project'`, both due at `2026-10-08T23:59:00+08:00`, and asserts both reminders have `notificationAt: '2026-10-07T23:59:00+08:00'`. Import an `event` in the same test and assert its reminder has no `notificationAt`.
 
 - [ ] **Step 4: Run the focused repository test and verify it fails for the missing field**
 
@@ -56,11 +56,11 @@ In `validateSnapshot`, parse `notificationAt` when present. For older Blackboard
 
 - [ ] **Step 3: Set and update the field during Blackboard import**
 
-When creating or updating an imported assignment, set `notificationAt` to one local day before `candidate.dueAt`. When an existing Blackboard item changes from assignment to another type, remove the field. Reset notification delivery state when either deadline or notification time changes.
+When creating or updating an imported assignment or project, set `notificationAt` to one local day before `candidate.dueAt`. When an existing Blackboard item changes from assignment/project to another type, remove the field. Reset notification delivery state when either deadline or notification time changes.
 
 - [ ] **Step 4: Preserve the rule while editing or advancing reminders**
 
-Pass the assignment notification time through `saveMemoDraft`/`saveReminderDraft` when editing an imported assignment. In `setReminderStatus`, after advancing a recurring assignment occurrence, recompute `notificationAt` from the new `dueAt`.
+Pass the assignment/project notification time through `saveMemoDraft`/`saveReminderDraft` when editing an imported assignment or project. In `setReminderStatus`, after advancing a recurring assignment/project occurrence, recompute `notificationAt` from the new `dueAt`.
 
 - [ ] **Step 5: Make the scheduler use the notification window**
 

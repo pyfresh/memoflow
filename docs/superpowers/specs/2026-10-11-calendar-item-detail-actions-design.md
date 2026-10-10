@@ -33,7 +33,7 @@
 
 ## Blackboard 作业提醒规则
 
-- `itemType === 'assignment'` 的 Blackboard 作业继续以截止时间显示在月历上，但通知触发时间设为截止时间前一天的同一时刻。
+- `itemType === 'assignment'` 或 `itemType === 'project'` 的 Blackboard 作业/项目继续以截止时间显示在月历上，但通知触发时间设为截止时间前一天的同一时刻。
 - 普通备忘录、独立提醒以及其他 Blackboard 事项仍在各自的截止时间触发通知。
 - 提醒时间作为事项数据的一部分持久化；作业截止时间被同步更新时，提前一天的通知时间同步重算。
 - 重复作业沿用每次 occurrence 的截止时间，并为下一次 occurrence 重算提前一天的通知时间。
