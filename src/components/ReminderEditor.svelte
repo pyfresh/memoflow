@@ -150,8 +150,6 @@
       <h2>{standalone ? '只提醒我这件事' : '写下现在要记住的事'}</h2>
     </div>
     <div class="editor-actions">
-      {#if existingReminderId}<button class="complete-action" type="button" on:click={completeItem}>完成</button>{/if}
-      {#if existingMemoId || existingReminderId}<button class="delete-action" type="button" on:click={deleteItem}>删除</button>{/if}
       <button class="editor-cancel" type="button" aria-label="关闭编辑器" title="关闭" on:click={() => dispatch('cancel')}>×</button>
       <button class="primary" type="submit">{standalone ? '保存提醒' : '保存备忘录'}</button>
     </div>
@@ -216,12 +214,20 @@
       </select>
     </label>
   </div>
+
+  {#if existingReminderId || existingMemoId}
+    <div class="editor-footer-actions" role="group" aria-label="事项操作">
+      {#if existingReminderId}<button class="complete-action" type="button" on:click={completeItem}>完成</button>{/if}
+      <button class="delete-action" type="button" on:click={deleteItem}>删除</button>
+    </div>
+  {/if}
 </form>
 
 <style>
   .editor-form { display:flex; flex-direction:column; gap:18px; }
   .editor-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
   .editor-actions { display:flex; align-items:center; gap:8px; flex:none; }
+  .editor-footer-actions { display:flex; justify-content:flex-end; align-items:center; gap:12px; margin-top:2px; padding-top:14px; border-top:1px solid var(--line); }
   .eyebrow { margin:0 0 5px; color:var(--accent); font-size:.7rem; font-weight:750; letter-spacing:.12em; text-transform:uppercase; }
   h2 { margin:0; font-size:1.45rem; letter-spacing:-.035em; }
   label, .field-label { display:flex; flex-direction:column; gap:7px; color:var(--ink-soft); font-size:.8rem; font-weight:650; }
@@ -243,7 +249,7 @@
   .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
   .primary { border:0; border-radius:8px; padding:10px 14px; background:var(--accent); color:#fff; font:inherit; font-weight:750; cursor:pointer; box-shadow:0 6px 16px rgba(7,143,131,.2); }
   .primary:hover { background:var(--accent-strong); }
-  .complete-action, .delete-action { border:0; border-radius:8px; padding:10px 12px; font:inherit; font-size:.78rem; font-weight:750; cursor:pointer; }
+  .complete-action, .delete-action { min-width:76px; border:0; border-radius:8px; padding:10px 14px; font:inherit; font-size:.78rem; font-weight:750; cursor:pointer; }
   .complete-action { background:#2e8064; color:#fff; }
   .complete-action:hover, .complete-action:focus-visible { background:#24664f; }
   .delete-action { background:#fff0ed; color:#a3433d; }

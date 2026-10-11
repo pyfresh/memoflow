@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ReminderEditor from '../../src/components/ReminderEditor.svelte';
 
@@ -18,8 +18,10 @@ describe('ReminderEditor', () => {
       onSave: vi.fn(), onComplete, onDelete, existingMemoId: 'memo-1', existingReminderId: 'reminder-1',
     });
 
-    const complete = screen.getByRole('button', { name: '完成' });
-    const remove = screen.getByRole('button', { name: '删除' });
+    const footerActions = screen.getByRole('group', { name: '事项操作' });
+    expect(footerActions).toHaveClass('editor-footer-actions');
+    const complete = within(footerActions).getByRole('button', { name: '完成' });
+    const remove = within(footerActions).getByRole('button', { name: '删除' });
     expect(complete).toHaveClass('complete-action');
     expect(remove).toHaveClass('delete-action');
 
