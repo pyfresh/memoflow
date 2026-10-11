@@ -127,7 +127,7 @@ export interface CalendarCell {
   isToday: boolean;
 }
 
-export interface CalendarItem { id: string; date: string; title: string; kind: 'course' | 'reminder' | 'note'; time?: string; }
+export interface CalendarItem { id: string; date: string; title: string; kind: 'course' | 'reminder' | 'note'; time?: string; status?: ReminderStatus; }
 export interface RecentItem {
   searchText?: string;
   id: string;

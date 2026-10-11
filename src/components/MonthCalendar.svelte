@@ -48,6 +48,7 @@
   <div class="calendar-legend" aria-label="日历图例">
     <span><i class="legend-dot course"></i>课程</span>
     <span><i class="legend-dot reminder"></i>提醒</span>
+    <span><i class="legend-dot completed"></i>已完成</span>
   </div>
 
   <div class="weekdays" aria-hidden="true">
@@ -61,8 +62,8 @@
       <div class:outside={!cell.isCurrentMonth} class:today={cell.isToday} class="calendar-cell" data-testid={"calendar-cell-" + cell.date} role="gridcell">
         <span class="day-number">{Number(cell.date.slice(-2))}</span>
         <div class="cell-items">
-          {#each visibleItems(cell).slice(0, 3) as item}
-            <button type="button" class="calendar-item {item.kind}" on:click={() => dispatch('select', item)} title={item.title}>
+          {#each visibleItems(cell).slice(0, 3) as item (item.id + ':' + item.status)}
+            <button type="button" class="calendar-item {item.kind} {item.status === 'completed' ? 'completed' : ''}" on:click={() => dispatch('select', item)} title={item.title}>
               <span>{item.title}</span>
               {#if item.time}<small>{item.time}</small>{/if}
             </button>
@@ -89,6 +90,7 @@
   .legend-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); }
   .legend-dot.course { background:var(--highlight); }
   .legend-dot.reminder { background:var(--accent); }
+  .legend-dot.completed { background:#2e8064; }
   .weekdays, .calendar-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); }
   .weekdays { padding:0 8px 8px; color:var(--ink-muted); font-size:.7rem; text-align:right; }
   .calendar-grid { overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--line); gap:1px; box-shadow:var(--shadow-sm); }
@@ -104,6 +106,7 @@
   .calendar-item.course { border-left-color:var(--highlight); background:#fff0e9; color:#a65339; }
   .calendar-item.reminder { background:var(--accent-soft); color:var(--accent-strong); }
   .calendar-item.note { background:#edf7f1; color:var(--success); }
+  .calendar-item.completed { border-left-color:#2e8064; background:#e7f4ed; color:#24664f; }
   .more-items { color:var(--ink-muted); font-size:.63rem; }
   @media (max-width:900px) { .calendar-cell { min-height:82px; padding:6px; } .calendar-item { font-size:.62rem; } }
 </style>

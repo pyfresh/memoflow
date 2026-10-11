@@ -47,7 +47,8 @@
   let filteredReminderItems: RecentItem[] = [];
   let recentItems: RecentItem[] = [];
   let memoItems: Memo[] = [];
-  let calendarItems: CalendarItem[] = [];
+  let calendarItems: CalendarItem[] = buildCalendarItems(snapshot, currentMonth);
+  let calendarVersion = 0;
 
   function monthBounds(date: Date): [string, string] {
     const start = new Date(date.getFullYear(), date.getMonth(), 1);
@@ -99,7 +100,7 @@
     const matchesQuery = !normalizedQuery || item.title.toLowerCase().includes(normalizedQuery) || (item.searchText ?? '').toLowerCase().includes(normalizedQuery);
     return matchesQuery;
   });
-  $: recentItems = filteredReminderItems.slice(0, 7);
+  $: recentItems = filteredReminderItems.filter((item) => item.status !== 'completed').slice(0, 7);
   $: memoItems = snapshot.memos
     .filter((memo) => {
       const normalizedQuery = query.trim().toLowerCase();
@@ -108,16 +109,17 @@
     })
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
-  $: {
-    const [rangeStart, rangeEnd] = monthBounds(currentMonth);
-    calendarItems = snapshot.reminders.flatMap((reminder): CalendarItem[] => {
-      const memo = snapshot.memos.find((item) => item.id === reminder.memoId);
+  function buildCalendarItems(source: AppSnapshot, month: Date): CalendarItem[] {
+    const [rangeStart, rangeEnd] = monthBounds(month);
+    return source.reminders.flatMap((reminder): CalendarItem[] => {
+      const memo = source.memos.find((item) => item.id === reminder.memoId);
       return getReminderOccurrences(reminder, rangeStart, rangeEnd).map((occurrence) => ({
         id: reminder.id,
         date: occurrence.slice(0, 10),
         title: memo?.title ?? reminder.title,
         kind: memo?.source === 'blackboard' ? 'course' : 'reminder',
         time: occurrence.slice(11, 16),
+        status: reminder.status,
       }));
     });
   }
@@ -125,6 +127,12 @@
   function refresh() {
     snapshot = repository.load();
     notificationSettings = repository.getNotificationSettings();
+    calendarItems = buildCalendarItems(snapshot, currentMonth);
+  }
+
+  function changeCalendarMonth(event: CustomEvent<Date>) {
+    currentMonth = event.detail;
+    calendarItems = buildCalendarItems(snapshot, currentMonth);
   }
 
   function navigate(event: CustomEvent<View>) {
@@ -195,6 +203,8 @@
     repository.setReminderStatus(event.detail.reminderId, 'completed');
     showEditor = false;
     refresh();
+    calendarItems = calendarItems.map((item) => item.id === event.detail.reminderId ? { ...item, status: 'completed' } : item);
+    calendarVersion += 1;
     void repository.flush();
   }
 
@@ -210,6 +220,8 @@
   function updateStatus(event: CustomEvent<{ item: RecentItem; status: 'completed' | 'ignored' }>) {
     repository.setReminderStatus(event.detail.item.id, event.detail.status);
     refresh();
+    calendarItems = calendarItems.map((item) => item.id === event.detail.item.id ? { ...item, status: event.detail.status } : item);
+    calendarVersion += 1;
     void repository.flush();
   }
 
@@ -412,7 +424,9 @@
 
       <section class="dashboard">
         <RecentItems items={recentItems} {query} on:select={editItem} on:status={updateStatus} />
-        <MonthCalendar month={currentMonth} items={calendarItems} on:monthChange={(event) => (currentMonth = event.detail)} on:select={selectCalendarItem} />
+        {#key calendarVersion}
+          <MonthCalendar month={currentMonth} items={calendarItems} on:monthChange={changeCalendarMonth} on:select={selectCalendarItem} />
+        {/key}
       </section>
     {:else if activeView === 'schedule'}
       <WeeklySchedule entries={snapshot.courseSchedules ?? []} weekStart={currentWeek} on:weekChange={(event) => (currentWeek = event.detail)} on:importZip={handleScheduleImport} />

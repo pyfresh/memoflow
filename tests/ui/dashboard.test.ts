@@ -102,6 +102,8 @@ describe('MemoFlow dashboard', () => {
     await fireEvent.click(within(dialog).getByRole('button', { name: '完成' }));
     const snapshot = JSON.parse(localStorage.getItem('memoflow.snapshot.v1') ?? '{}');
     expect(snapshot.reminders[0].status).toBe('completed');
+    await waitFor(() => expect(within(screen.getByRole('region', { name: '最近事项' })).queryByText('Homework 1')).not.toBeInTheDocument());
+    expect(within(screen.getByRole('region', { name: '月历' })).getByRole('button', { name: /Homework 1/ })).toHaveClass('completed');
   });
 
   it('deletes the selected calendar memo and its reminder', async () => {
