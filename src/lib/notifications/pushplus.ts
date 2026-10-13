@@ -17,6 +17,8 @@ export interface PushPlusResponse {
 
 export type PushPlusTransport = (message: PushPlusMessage) => Promise<PushPlusResponse>;
 
+export const PUSHPLUS_ENDPOINT = 'https://www.pushplus.plus/send';
+
 export function redactToken(token: string): string {
   const value = token.trim();
   if (value.length <= 6) return '••••••';
@@ -63,25 +65,57 @@ export function validatePushPlusResponse(value: unknown): PushPlusResponse {
 
 const invokePushPlus: PushPlusTransport = async (message) => invoke<PushPlusResponse>('send_pushplus_message', { message });
 
-export async function sendPushPlusMessage(token: string, message: Omit<PushPlusMessage, 'token'>, transport: PushPlusTransport = invokePushPlus): Promise<PushPlusResponse> {
+const fetchPushPlus: PushPlusTransport = async (message) => {
+  const response = await fetch(PUSHPLUS_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(message),
+  });
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  if (!response.ok) {
+    const detail = payload && typeof payload === 'object' && 'msg' in payload && typeof payload.msg === 'string'
+      ? payload.msg
+      : `HTTP ${response.status}`;
+    throw new Error(detail);
+  }
+  return validatePushPlusResponse(payload);
+};
+
+function isTauriRuntime(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+export function defaultPushPlusTransport(): PushPlusTransport {
+  return isTauriRuntime() ? invokePushPlus : fetchPushPlus;
+}
+
+export async function sendPushPlusMessage(token: string, message: Omit<PushPlusMessage, 'token'>, transport?: PushPlusTransport): Promise<PushPlusResponse> {
   const trimmed = token.trim();
   if (!trimmed) throw new Error('PushPlus Token 不能为空');
   try {
-    return validatePushPlusResponse(await transport({ ...message, token: trimmed }));
+    return validatePushPlusResponse(await (transport ?? defaultPushPlusTransport())({ token: trimmed, ...message }));
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('PushPlus：')) throw error;
     throw new Error(`PushPlus 请求失败（Token ${redactToken(trimmed)}）：${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
-export async function sendPushPlusReminder(reminder: Reminder, token: string, courseCode?: string, itemType?: string, transport: PushPlusTransport = invokePushPlus): Promise<PushPlusResponse> {
+export async function sendPushPlusReminder(reminder: Reminder, token: string, courseCode?: string, itemType?: string, transport?: PushPlusTransport): Promise<PushPlusResponse> {
   const message = buildPushPlusMessage(reminder, courseCode, itemType, '');
   const { token: _ignored, ...body } = message;
   return sendPushPlusMessage(token, body, transport);
 }
 
-export async function sendPushPlusCountdown(countdown: Countdown, token: string, transport: PushPlusTransport = invokePushPlus): Promise<PushPlusResponse> {
+export async function sendPushPlusCountdown(countdown: Countdown, token: string, transport?: PushPlusTransport): Promise<PushPlusResponse> {
   const message = buildPushPlusCountdownMessage(countdown, '');
   const { token: _ignored, ...body } = message;
   return sendPushPlusMessage(token, body, transport);
 }
+

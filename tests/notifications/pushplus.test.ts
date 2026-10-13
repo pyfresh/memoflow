@@ -26,4 +26,20 @@ describe('PushPlus adapter', () => {
     await expect(sendPushPlusMessage('  ', { title: 'test', content: 'test', channel: 'wechat', template: 'txt' }, transport)).rejects.toThrow('Token');
     expect(transport).not.toHaveBeenCalled();
   });
+
+  it('uses the PushPlus HTTP API from the browser preview', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, msg: '请求成功' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await sendPushPlusMessage('token-123', { title: '事项', content: '截止时间：今天', channel: 'wechat', template: 'txt' });
+
+    expect(fetchMock).toHaveBeenCalledWith('https://www.pushplus.plus/send', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ token: 'token-123', title: '事项', content: '截止时间：今天', channel: 'wechat', template: 'txt' }),
+    }));
+    vi.unstubAllGlobals();
+  });
 });
