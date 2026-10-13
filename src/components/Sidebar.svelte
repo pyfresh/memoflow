@@ -8,9 +8,6 @@
     navigate: View;
     importBlackboard: void;
     openNotificationSettings: void;
-    seedDemoData: void;
-    exportData: void;
-    exportPlainText: void;
   }>();
 
   const views: Array<{ id: View; icon: string; label: string }> = [
@@ -36,9 +33,6 @@
   <div class="sidebar-bottom">
     <button class="sidebar-action" type="button" on:click={() => dispatch('importBlackboard')}>⌁　从 Blackboard 导入作业</button>
     <button class="sidebar-action" type="button" on:click={() => dispatch('openNotificationSettings')}>◉　通知设置</button>
-    <button class="sidebar-action" type="button" on:click={() => dispatch('seedDemoData')}>✦　加载示例数据</button>
-    <button class="sidebar-action" type="button" on:click={() => dispatch('exportData')}>↓　导出 Markdown</button>
-    <button class="sidebar-action" type="button" on:click={() => dispatch('exportPlainText')}>↓　导出纯文本</button>
     <p class="sidebar-footnote">数据保存在本机</p>
   </div>
 </aside>

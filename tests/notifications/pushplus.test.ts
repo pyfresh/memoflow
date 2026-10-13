@@ -5,13 +5,12 @@ describe('PushPlus adapter', () => {
   it('builds a text message without rich HTML', () => {
     const message = buildPushPlusMessage({
       id: 'r1', memoId: 'm1', title: 'Assignment 1', dueAt: '2026-10-08T23:59:00+08:00',
-      recurrenceRule: null, status: 'pending', notificationSentAt: null,
+      notificationAt: '2026-10-07T23:59:00+08:00', recurrenceRule: null, status: 'pending', notificationSentAt: null,
       createdAt: '2026-10-01T00:00:00+08:00', updatedAt: '2026-10-01T00:00:00+08:00',
     }, 'AIS6002', 'assignment');
 
-    expect(message).toMatchObject({ token: 'token', title: 'MemoFlow 提醒', channel: 'wechat', template: 'txt' });
-    expect(message.content).toContain('Assignment 1');
-    expect(message.content).toContain('AIS6002');
+    expect(message).toMatchObject({ token: 'token', title: 'Assignment 1', channel: 'wechat', template: 'txt' });
+    expect(message.content).toBe('截止时间：2026-10-08 23:59\n标签：assignment · AIS6002');
     expect(message.content).not.toContain('<p>');
   });
 

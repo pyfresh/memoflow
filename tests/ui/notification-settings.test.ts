@@ -11,6 +11,7 @@ describe('NotificationSettings', () => {
     await fireEvent.input(screen.getByLabelText('PushPlus Token'), { target: { value: 'token-123' } });
     await fireEvent.click(screen.getByRole('button', { name: '保存通知设置' }));
     expect(onSave).toHaveBeenCalledWith({ pushplusEnabled: true, pushplusToken: 'token-123' });
+    expect(screen.getByRole('status')).toHaveTextContent('通知设置已保存');
   });
 
   it('rejects an enabled setting without a token and exposes test-send feedback', async () => {

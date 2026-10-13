@@ -16,9 +16,31 @@ describe('countdown notifications', () => {
 
     expect(result.pushplus).toEqual({ sent: true });
     expect(transport).toHaveBeenCalledWith(expect.objectContaining({
-      title: 'MemoFlow 提醒', channel: 'wechat', template: 'txt',
-      content: expect.stringContaining('倒计时完成：专注写作'),
+      title: '专注写作', channel: 'wechat', template: 'txt',
+      content: '倒计时已结束\n总时长：25 分钟',
     }));
+  });
+
+  it.each([
+    [5, '5 秒'],
+    [90, '1 分钟 30 秒'],
+    [3600, '1 小时'],
+    [3661, '1 小时 1 分钟 1 秒'],
+    [90061, '25 小时 1 分钟 1 秒'],
+  ])('includes the original total duration of %i seconds', async (totalSeconds, duration) => {
+    const transport = vi.fn().mockResolvedValue({ code: 200, msg: '请求成功' });
+    await notifyCountdown({ ...countdown, totalSeconds }, { pushplusEnabled: true, pushplusToken: 'test-token' }, transport);
+    expect(transport).toHaveBeenCalledWith(expect.objectContaining({
+      title: countdown.name, content: `倒计时已结束\n总时长：${duration}`,
+    }));
+  });
+
+  it('does not resend an already delivered countdown', async () => {
+    const transport = vi.fn();
+    await notifyCountdown({ ...countdown, delivery: {
+      nativeSentAt: null, pushplusSentAt: '2026-10-07T09:25:00.000Z', pushplusLastError: null,
+    } }, { pushplusEnabled: true, pushplusToken: 'test-token' }, transport);
+    expect(transport).not.toHaveBeenCalled();
   });
 
   it('returns a retryable PushPlus failure instead of marking delivery as sent', async () => {

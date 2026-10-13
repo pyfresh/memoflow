@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Reminder } from '../domain/types';
+import type { Countdown, Reminder } from '../domain/types';
 
 export interface PushPlusMessage {
   token: string;
@@ -23,11 +23,33 @@ export function redactToken(token: string): string {
   return `${value.slice(0, 3)}••••${value.slice(-3)}`;
 }
 
+export function formatCountdownDuration(totalSeconds: number): string {
+  const total = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const parts: string[] = [];
+  if (hours) parts.push(`${hours} 小时`);
+  if (minutes) parts.push(`${minutes} 分钟`);
+  if (seconds || parts.length === 0) parts.push(`${seconds} 秒`);
+  return parts.join(' ');
+}
+
 export function buildPushPlusMessage(reminder: Reminder, courseCode?: string, itemType?: string, token = 'token'): PushPlusMessage {
   const due = reminder.dueAt.replace('T', ' ').replace(/([+-]\d{2}:?\d{2}|Z)$/, '').slice(0, 16);
   const tags = [itemType, courseCode].filter(Boolean).join(' · ');
-  const content = [`${reminder.title}`, `截止时间：${due}`, tags ? `标签：${tags}` : ''].filter(Boolean).join('\n');
-  return { token, title: 'MemoFlow 提醒', content, channel: 'wechat', template: 'txt' };
+  const content = [`截止时间：${due}`, tags ? `标签：${tags}` : ''].filter(Boolean).join('\n');
+  return { token, title: reminder.title, content, channel: 'wechat', template: 'txt' };
+}
+
+export function buildPushPlusCountdownMessage(countdown: Countdown, token = 'token'): PushPlusMessage {
+  return {
+    token,
+    title: countdown.name,
+    content: `倒计时已结束\n总时长：${formatCountdownDuration(countdown.totalSeconds)}`,
+    channel: 'wechat',
+    template: 'txt',
+  };
 }
 
 export function validatePushPlusResponse(value: unknown): PushPlusResponse {
@@ -54,6 +76,12 @@ export async function sendPushPlusMessage(token: string, message: Omit<PushPlusM
 
 export async function sendPushPlusReminder(reminder: Reminder, token: string, courseCode?: string, itemType?: string, transport: PushPlusTransport = invokePushPlus): Promise<PushPlusResponse> {
   const message = buildPushPlusMessage(reminder, courseCode, itemType, '');
+  const { token: _ignored, ...body } = message;
+  return sendPushPlusMessage(token, body, transport);
+}
+
+export async function sendPushPlusCountdown(countdown: Countdown, token: string, transport: PushPlusTransport = invokePushPlus): Promise<PushPlusResponse> {
+  const message = buildPushPlusCountdownMessage(countdown, '');
   const { token: _ignored, ...body } = message;
   return sendPushPlusMessage(token, body, transport);
 }

@@ -128,11 +128,30 @@ describe('MemoFlow dashboard', () => {
     expect(snapshot.reminders).toHaveLength(0);
   });
 
-  it('exposes Blackboard sync, export and search controls', () => {
+  it('exposes Blackboard sync and search controls without removed utility actions', () => {
     render(App);
     expect(screen.getByRole('button', { name: /从 Blackboard 导入作业/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /导出 Markdown/ })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: '搜索备忘录' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /加载示例数据/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /导出 Markdown/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /导出纯文本/ })).not.toBeInTheDocument();
+  });
+
+  it('keeps notification settings updated after saving them', async () => {
+    render(App);
+    await fireEvent.click(screen.getByRole('button', { name: /通知设置/ }));
+    const dialog = screen.getByRole('dialog', { name: '通知设置' });
+    await fireEvent.click(within(dialog).getByRole('checkbox', { name: '启用 PushPlus 微信提醒' }));
+    await fireEvent.input(within(dialog).getByLabelText('PushPlus Token'), { target: { value: 'token-123' } });
+    await fireEvent.click(within(dialog).getByRole('button', { name: '保存通知设置' }));
+
+    expect(within(dialog).getByRole('status')).toHaveTextContent('通知设置已保存');
+    await fireEvent.click(within(dialog).getByRole('button', { name: '关闭通知设置' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '通知设置' })).not.toBeInTheDocument());
+    await fireEvent.click(screen.getByRole('button', { name: /通知设置/ }));
+    const reopenedDialog = screen.getByRole('dialog', { name: '通知设置' });
+    expect(within(reopenedDialog).getByRole('checkbox', { name: '启用 PushPlus 微信提醒' })).toBeChecked();
+    expect(within(reopenedDialog).getByLabelText('PushPlus Token')).toHaveValue('token-123');
   });
 
   it('shows Blackboard type and course code tags in recent items', () => {
@@ -160,14 +179,6 @@ describe('MemoFlow dashboard', () => {
     expect(within(recent).getByText('assignment')).toBeInTheDocument();
     expect(within(recent).getByText('AIS6002')).toBeInTheDocument();
     expect(within(recent).queryByText('课程')).not.toBeInTheDocument();
-  });
-
-  it('loads virtual demo data from the sidebar', async () => {
-    render(App);
-    await fireEvent.click(screen.getByRole('button', { name: /加载示例数据/ }));
-
-    await waitFor(() => expect(screen.getByText('线性代数项目规划')).toBeInTheDocument());
-    expect(screen.getByText(/已加载 4 条备忘录、6 条提醒和 2 节课程/)).toBeInTheDocument();
   });
 
 });

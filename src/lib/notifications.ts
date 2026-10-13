@@ -1,6 +1,6 @@
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import type { Countdown, NotificationSettings, Reminder } from './domain/types';
-import { sendPushPlusReminder, type PushPlusTransport } from './notifications/pushplus';
+import { sendPushPlusCountdown, sendPushPlusReminder, type PushPlusTransport } from './notifications/pushplus';
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -71,5 +71,14 @@ export function notifyCountdown(
   settings: NotificationSettings = { pushplusEnabled: false, pushplusToken: '' },
   pushplusTransport?: PushPlusTransport,
 ): Promise<ReminderNotificationResult> {
-  return notifyReminder(countdownReminder(countdown), settings, {}, pushplusTransport);
+  const reminder = countdownReminder(countdown);
+  return notifyReminder(reminder, { ...settings, pushplusEnabled: false }, {}, pushplusTransport).then(async (result) => {
+    if (!settings.pushplusEnabled || !settings.pushplusToken.trim() || countdown.delivery?.pushplusSentAt) return result;
+    try {
+      await sendPushPlusCountdown(countdown, settings.pushplusToken, pushplusTransport);
+      return { ...result, pushplus: { sent: true } };
+    } catch (error) {
+      return { ...result, pushplus: { sent: false, error: error instanceof Error ? error.message : String(error) } };
+    }
+  });
 }

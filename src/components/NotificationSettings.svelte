@@ -21,6 +21,7 @@
     const next = { pushplusEnabled: enabled, pushplusToken: token.trim() };
     onSave(next);
     dispatch('save', next);
+    status = '通知设置已保存';
   }
 
   async function testSend() {

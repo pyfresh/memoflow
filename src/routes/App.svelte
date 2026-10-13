@@ -20,7 +20,6 @@
   import { notifyCountdown, notifyReminder } from '$lib/notifications';
   import { sendPushPlusReminder } from '$lib/notifications/pushplus';
   import { createDesktopPersistenceDriver } from '$lib/data/desktop';
-  import { exportMemosToMarkdown, exportMemosToPlainText } from '$lib/export/markdown';
   import { classifyBlackboardSource, normalizeCourseCode } from '$lib/import/normalize';
 
   const desktopPersistence = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window ? createDesktopPersistenceDriver() : undefined;
@@ -34,7 +33,6 @@
   let showImporter = false;
   let showScheduleImporter = false;
   let showNotificationSettings = false;
-  let seedMessage = '';
   let syncMessage = '';
   let scheduleMessage = '';
   let editingDraft: Partial<MemoDraft> = {};
@@ -243,9 +241,8 @@
   }
 
   function saveNotificationSettings(event: CustomEvent<NotificationSettingsType>) {
+    notificationSettings = event.detail;
     repository.saveNotificationSettings(event.detail);
-    refresh();
-    showNotificationSettings = false;
     void repository.flush();
   }
 
@@ -335,35 +332,6 @@
     void repository.flush();
   }
 
-  function seedDemoData() {
-    const result = repository.seedDemoData();
-    refresh();
-    seedMessage = result.addedMemos || result.addedReminders || result.addedBlackboardItems || result.addedSchedules
-      ? `已加载 ${result.addedMemos} 条备忘录、${result.addedReminders} 条提醒和 ${result.addedSchedules} 节课程`
-      : '示例数据已经存在';
-    void repository.flush();
-  }
-
-  function exportData() {
-    const blob = new Blob([exportMemosToMarkdown(snapshot)], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = 'memoflow-notes.md';
-    anchor.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function exportPlainText() {
-    const blob = new Blob([exportMemosToPlainText(snapshot)], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = 'memoflow-notes.txt';
-    anchor.click();
-    URL.revokeObjectURL(url);
-  }
-
   function closeEditorFromBackdrop(event: MouseEvent) {
     if (event.target === event.currentTarget) showEditor = false;
   }
@@ -403,10 +371,9 @@
 
 <div class="app-shell">
   <h1 class="sr-only">MemoFlow</h1>
-  <Sidebar activeView={activeView} on:navigate={navigate} on:importBlackboard={handleImport} on:openNotificationSettings={handleNotificationSettings} on:seedDemoData={seedDemoData} on:exportData={exportData} on:exportPlainText={exportPlainText} />
+  <Sidebar activeView={activeView} on:navigate={navigate} on:importBlackboard={handleImport} on:openNotificationSettings={handleNotificationSettings} />
 
   <main class="workspace">
-    {#if seedMessage}<p class="seed-feedback" role="status" aria-live="polite">{seedMessage}</p>{/if}
     {#if syncMessage}<p class="sync-feedback" role="status" aria-live="polite">{syncMessage}</p>{/if}
     {#if scheduleMessage}<p class="sync-feedback" role="status" aria-live="polite">{scheduleMessage}</p>{/if}
     {#if activeView === 'overview'}
@@ -491,7 +458,7 @@
 {#if showNotificationSettings}
   <div class="overlay" role="presentation" on:click={(event) => event.target === event.currentTarget && (showNotificationSettings = false)}>
     <div class="modal" role="dialog" aria-modal="true" aria-label="通知设置">
-      <NotificationSettings settings={notificationSettings} on:save={saveNotificationSettings} on:cancel={() => (showNotificationSettings = false)} onTest={testPushPlus} />
+      <NotificationSettings settings={notificationSettings} on:save={saveNotificationSettings} onCancel={() => (showNotificationSettings = false)} onTest={testPushPlus} />
     </div>
   </div>
 {/if}
@@ -499,6 +466,5 @@
 <style>
   .page-header { margin-bottom:28px; }
   .single-panel { max-width:820px; }
-  .seed-feedback { margin:0 0 16px; color:var(--accent-strong); font-size:.78rem; font-weight:650; }
   .sync-feedback { margin:0 0 16px; border:1px solid var(--accent-soft); border-radius:8px; padding:10px 12px; background:var(--surface-tint); color:var(--accent-strong); font-size:.78rem; font-weight:650; }
 </style>
