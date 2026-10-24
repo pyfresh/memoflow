@@ -65,10 +65,19 @@ export function normalizeLocalDateTime(value: string): string {
   parseLocalIso(local);
   return `${local}+08:00`;
 }
-export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = { pushplusEnabled: false, pushplusToken: '' };
-export function emptyReminderDelivery(): ReminderDeliveryState { return { nativeSentAt: null, pushplusSentAt: null, pushplusLastError: null }; }
-function snapshotNotificationRequired(settings?: NotificationSettings): boolean {
-  return settings?.pushplusEnabled === true && Boolean(settings.pushplusToken?.trim());
+export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = { pushplusEnabled: false, pushplusToken: '', dshEnabled: false, dshPort: 7239, dshPeerId: '' };
+export function emptyReminderDelivery(): ReminderDeliveryState {
+  return { nativeSentAt: null, pushplusSentAt: null, pushplusLastError: null, dshQueuedFile: null, dshSentAt: null, dshLastError: null };
+}
+function dshNotificationRequired(settings?: NotificationSettings): boolean { return settings?.dshEnabled === true; }
+function pushplusNotificationRequired(settings?: NotificationSettings): boolean { return settings?.pushplusEnabled === true && Boolean(settings.pushplusToken?.trim()); }
+function deliveryComplete(delivery: ReminderDeliveryState, settings?: NotificationSettings): boolean {
+  const pushplusRequired = pushplusNotificationRequired(settings);
+  const dshRequired = dshNotificationRequired(settings);
+  const externalSent = (pushplusRequired && Boolean(delivery.pushplusSentAt)) || (dshRequired && Boolean(delivery.dshSentAt));
+  return (Boolean(delivery.nativeSentAt) || externalSent)
+    && (!pushplusRequired || Boolean(delivery.pushplusSentAt))
+    && (!dshRequired || Boolean(delivery.dshSentAt));
 }
 function isEarlyBlackboardType(itemType: string | null | undefined): boolean {
   return itemType === 'assignment' || itemType === 'project';
@@ -143,6 +152,9 @@ function validateSnapshot(input: unknown): AppSnapshot {
     notificationSettings: {
       pushplusEnabled: notificationSettings?.pushplusEnabled === true,
       pushplusToken: typeof notificationSettings?.pushplusToken === 'string' ? notificationSettings.pushplusToken : '',
+      dshEnabled: notificationSettings?.dshEnabled === true,
+      dshPort: Number.isInteger(notificationSettings?.dshPort) && Number(notificationSettings?.dshPort) > 0 && Number(notificationSettings?.dshPort) <= 65535 ? Number(notificationSettings?.dshPort) : 7239,
+      dshPeerId: typeof notificationSettings?.dshPeerId === 'string' ? notificationSettings.dshPeerId.trim() : '',
     },
   };
 }
@@ -352,13 +364,20 @@ export class LocalRepository {
 
   listCountdowns(): Countdown[] { return this.load().countdowns ?? []; }
 
+  markCountdownNotificationChannelQueued(id: string, channel: NotificationChannel, file: string, queuedAt = nowIso()): void {
+    const snapshot = this.load(); const countdown = snapshot.countdowns?.find((item) => item.id === id); if (!countdown) return;
+    countdown.delivery = { ...emptyReminderDelivery(), ...(countdown.delivery ?? {}) };
+    if (channel === 'dsh') { countdown.delivery.dshQueuedFile = file; countdown.delivery.dshLastError = null; }
+    countdown.updatedAt = queuedAt; this.write(snapshot);
+  }
+
   markCountdownNotificationChannelSent(id: string, channel: NotificationChannel, sentAt: string): void {
     const snapshot = this.load(); const countdown = snapshot.countdowns?.find((item) => item.id === id); if (!countdown) return;
     countdown.delivery = { ...emptyReminderDelivery(), ...(countdown.delivery ?? {}) };
     if (channel === 'native') countdown.delivery.nativeSentAt = sentAt;
     if (channel === 'pushplus') { countdown.delivery.pushplusSentAt = sentAt; countdown.delivery.pushplusLastError = null; }
-    const pushplusRequired = Boolean(snapshotNotificationRequired(snapshot.notificationSettings));
-    if ((channel === 'pushplus' && countdown.delivery.pushplusSentAt) || (channel === 'native' && countdown.delivery.nativeSentAt && (!pushplusRequired || countdown.delivery.pushplusSentAt))) countdown.notificationSentAt = sentAt;
+    if (channel === 'dsh') { countdown.delivery.dshSentAt = sentAt; countdown.delivery.dshQueuedFile = null; countdown.delivery.dshLastError = null; }
+    if (deliveryComplete(countdown.delivery, snapshot.notificationSettings)) countdown.notificationSentAt = sentAt;
     countdown.updatedAt = sentAt; this.write(snapshot);
   }
 
@@ -366,6 +385,7 @@ export class LocalRepository {
     const snapshot = this.load(); const countdown = snapshot.countdowns?.find((item) => item.id === id); if (!countdown) return;
     countdown.delivery = { ...emptyReminderDelivery(), ...(countdown.delivery ?? {}) };
     if (channel === 'pushplus') countdown.delivery.pushplusLastError = error;
+    if (channel === 'dsh') { countdown.delivery.dshLastError = error; countdown.delivery.dshQueuedFile = null; }
     countdown.notificationSentAt = null; countdown.updatedAt = nowIso(); this.write(snapshot);
   }
 
@@ -519,22 +539,35 @@ export class LocalRepository {
   getNotificationSettings(): NotificationSettings { return { ...(this.load().notificationSettings ?? DEFAULT_NOTIFICATION_SETTINGS) }; }
   saveNotificationSettings(settings: NotificationSettings): void {
     const snapshot = this.load();
-    snapshot.notificationSettings = { pushplusEnabled: settings.pushplusEnabled === true, pushplusToken: settings.pushplusToken.trim() };
+    snapshot.notificationSettings = {
+      pushplusEnabled: settings.pushplusEnabled === true,
+      pushplusToken: settings.pushplusToken.trim(),
+      dshEnabled: settings.dshEnabled === true,
+      dshPort: Number.isInteger(settings.dshPort) && Number(settings.dshPort) > 0 && Number(settings.dshPort) <= 65535 ? Number(settings.dshPort) : 7239,
+      dshPeerId: (settings.dshPeerId ?? '').trim(),
+    };
     this.write(snapshot);
+  }
+  markNotificationChannelQueued(id: string, channel: NotificationChannel, file: string, queuedAt = nowIso()): void {
+    const snapshot = this.load(); const reminder = snapshot.reminders.find((item) => item.id === id); if (!reminder) return;
+    reminder.delivery = { ...emptyReminderDelivery(), ...(reminder.delivery ?? {}) };
+    if (channel === 'dsh') { reminder.delivery.dshQueuedFile = file; reminder.delivery.dshLastError = null; }
+    reminder.updatedAt = queuedAt; this.write(snapshot);
   }
   markNotificationChannelSent(id: string, channel: NotificationChannel, sentAt: string): void {
     const snapshot = this.load(); const reminder = snapshot.reminders.find((item) => item.id === id); if (!reminder) return;
     reminder.delivery = { ...emptyReminderDelivery(), ...(reminder.delivery ?? {}) };
     if (channel === 'native') reminder.delivery.nativeSentAt = sentAt;
     if (channel === 'pushplus') { reminder.delivery.pushplusSentAt = sentAt; reminder.delivery.pushplusLastError = null; }
-    const pushplusRequired = Boolean(snapshotNotificationRequired(snapshot.notificationSettings));
-    if (reminder.delivery.nativeSentAt && (!pushplusRequired || reminder.delivery.pushplusSentAt)) reminder.notificationSentAt = sentAt;
+    if (channel === 'dsh') { reminder.delivery.dshSentAt = sentAt; reminder.delivery.dshQueuedFile = null; reminder.delivery.dshLastError = null; }
+    if (deliveryComplete(reminder.delivery, snapshot.notificationSettings)) reminder.notificationSentAt = sentAt;
     reminder.updatedAt = sentAt; this.write(snapshot);
   }
   markNotificationChannelFailed(id: string, channel: NotificationChannel, error: string): void {
     const snapshot = this.load(); const reminder = snapshot.reminders.find((item) => item.id === id); if (!reminder) return;
     reminder.delivery = { ...emptyReminderDelivery(), ...(reminder.delivery ?? {}) };
     if (channel === 'pushplus') reminder.delivery.pushplusLastError = error;
+    if (channel === 'dsh') { reminder.delivery.dshLastError = error; reminder.delivery.dshQueuedFile = null; }
     reminder.notificationSentAt = null; reminder.updatedAt = nowIso(); this.write(snapshot);
   }
   markNotificationSent(id: string, sentAt: string): void { this.markNotificationChannelSent(id, 'native', sentAt); }

@@ -21,6 +21,26 @@ describe('countdown notifications', () => {
     }));
   });
 
+  it('uses the countdown-specific DSH message format', async () => {
+    const dshTransport = {
+      enqueue: vi.fn().mockResolvedValue({ ok: true, file: 'outbox/countdown.json' }),
+      check: vi.fn(),
+    };
+
+    const result = await notifyCountdown(
+      countdown,
+      { pushplusEnabled: false, pushplusToken: '', dshEnabled: true, dshPort: 7239, dshPeerId: 'wx-peer' },
+      undefined,
+      dshTransport,
+    );
+
+    expect(result.dsh).toEqual({ sent: false, pending: true, queuedFile: 'outbox/countdown.json' });
+    expect(dshTransport.enqueue).toHaveBeenCalledWith({
+      text: '专注写作\n倒计时已结束\n总时长：25 分钟',
+      peerId: 'wx-peer',
+    });
+  });
+
   it.each([
     [5, '5 秒'],
     [90, '1 分钟 30 秒'],

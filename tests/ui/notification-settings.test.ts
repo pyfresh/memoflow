@@ -24,4 +24,30 @@ describe('NotificationSettings', () => {
     expect(onTest).toHaveBeenCalledWith('token-123');
     expect(await screen.findByRole('status')).toHaveTextContent('测试提醒已发送');
   });
+
+  it('saves DSH bridge settings and reports queued delivery accurately', async () => {
+    const onSave = vi.fn();
+    const onTestDsh = vi.fn().mockResolvedValue({ file: 'outbox/test.json' });
+    render(NotificationSettings, {
+      settings: { pushplusEnabled: false, pushplusToken: '', dshEnabled: false, dshPort: 7239, dshPeerId: '' },
+      onSave,
+      onTestDsh,
+    });
+
+    await fireEvent.click(screen.getByRole('checkbox', { name: '启用 DSH 微信桥接' }));
+    await fireEvent.input(screen.getByLabelText('DSH 端口'), { target: { value: '7239' } });
+    await fireEvent.input(screen.getByLabelText('DSH 接收方 ID'), { target: { value: 'wx-peer' } });
+    await fireEvent.click(screen.getByRole('button', { name: '发送 DSH 测试消息' }));
+    expect(onTestDsh).toHaveBeenCalledWith({ port: 7239, peerId: 'wx-peer' });
+    expect(await screen.findByRole('status')).toHaveTextContent('加入微信桥发送队列');
+
+    await fireEvent.click(screen.getByRole('button', { name: '保存通知设置' }));
+    expect(onSave).toHaveBeenCalledWith({
+      pushplusEnabled: false,
+      pushplusToken: '',
+      dshEnabled: true,
+      dshPort: 7239,
+      dshPeerId: 'wx-peer',
+    });
+  });
 });

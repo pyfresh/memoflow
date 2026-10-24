@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 mod db;
 
@@ -37,6 +37,74 @@ struct PushPlusResponse {
     msg: String,
     #[serde(default)]
     data: Option<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct DshWxbridgeMessage {
+    text: String,
+    host: String,
+    port: u16,
+    #[serde(rename = "peerId", default)]
+    peer_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct DshQueueResponse {
+    ok: bool,
+    #[serde(default)]
+    file: Option<String>,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+struct DshDeliveryResponse {
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+fn validate_dsh_host(host: &str) -> Result<&str, String> {
+    match host.trim().to_ascii_lowercase().as_str() {
+        "127.0.0.1" | "localhost" => Ok(if host.trim().eq_ignore_ascii_case("localhost") { "localhost" } else { "127.0.0.1" }),
+        _ => Err("DSH 只允许连接本机回环地址".to_string()),
+    }
+}
+
+fn dsh_outbox_root() -> Result<PathBuf, String> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .ok_or_else(|| "无法确定用户目录".to_string())?;
+    Ok(PathBuf::from(home).join(".dsh").join("wxbridge").join("outbox"))
+}
+
+fn safe_dsh_delivery_path(file: &str, root: &Path) -> Result<PathBuf, String> {
+    let path = PathBuf::from(file.trim());
+    let root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let parent = path.parent().ok_or_else(|| "DSH 队列路径无效".to_string())?;
+    let parent = fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+    if !parent.starts_with(&root) || path.file_name().and_then(|v| v.to_str()).is_none() {
+        return Err("DSH 队列路径不在用户 wxbridge outbox 内".to_string());
+    }
+    Ok(path)
+}
+
+fn dsh_delivery_status_for_paths(file: &Path, root: &Path) -> DshDeliveryResponse {
+    if file.exists() {
+        return DshDeliveryResponse { status: "pending".to_string(), error: None };
+    }
+    let name = file.file_name().and_then(|v| v.to_str()).unwrap_or_default();
+    let sent = root.join("sent").join(name);
+    if sent.exists() {
+        return DshDeliveryResponse { status: "sent".to_string(), error: None };
+    }
+    let failed = root.join("failed").join(format!("send-failed--{name}"));
+    if failed.exists() {
+        return DshDeliveryResponse { status: "failed".to_string(), error: Some("微信桥发送失败".to_string()) };
+    }
+    DshDeliveryResponse { status: "pending".to_string(), error: None }
 }
 
 fn validate_pushplus_token(token: &str) -> Result<(), String> {
@@ -570,6 +638,54 @@ async fn send_pushplus_message(message: PushPlusMessage) -> Result<PushPlusRespo
     parse_pushplus_response(&body)
 }
 
+#[tauri::command]
+async fn send_dsh_wxbridge_message(message: DshWxbridgeMessage) -> Result<DshQueueResponse, String> {
+    let host = validate_dsh_host(&message.host)?;
+    if message.port == 0 {
+        return Err("DSH 端口无效".to_string());
+    }
+    let text = message.text.trim();
+    if text.is_empty() {
+        return Err("DSH 消息不能为空".to_string());
+    }
+    if text.chars().count() > 4000 {
+        return Err("DSH 消息不能超过 4000 个字符".to_string());
+    }
+    let client = reqwest::Client::builder()
+        .use_rustls_tls()
+        .connect_timeout(std::time::Duration::from_secs(2))
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|error| format!("无法创建 DSH 请求：{error}"))?;
+    let mut body = serde_json::json!({ "text": text });
+    if !message.peer_id.trim().is_empty() {
+        body["to"] = Value::String(message.peer_id.trim().to_string());
+    }
+    let response = client
+        .post(format!("http://{host}:{}/wxbridge/push", message.port))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| format!("DSH 微信桥请求失败：{error}"))?;
+    let status = response.status();
+    let body_text = response.text().await.map_err(|error| format!("无法读取 DSH 响应：{error}"))?;
+    let parsed = serde_json::from_str::<DshQueueResponse>(&body_text).map_err(|_| "DSH 响应格式无效".to_string())?;
+    if !status.is_success() || !parsed.ok {
+        return Err(parsed.error.unwrap_or_else(|| format!("DSH HTTP {}", status.as_u16())));
+    }
+    if parsed.file.as_deref().unwrap_or_default().trim().is_empty() {
+        return Err("DSH 响应缺少队列文件".to_string());
+    }
+    Ok(parsed)
+}
+
+#[tauri::command]
+fn check_dsh_wxbridge_delivery(file: String) -> Result<DshDeliveryResponse, String> {
+    let root = dsh_outbox_root()?;
+    let safe = safe_dsh_delivery_path(&file, &root)?;
+    Ok(dsh_delivery_status_for_paths(&safe, &root))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -579,6 +695,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             send_pushplus_message,
+            send_dsh_wxbridge_message,
+            check_dsh_wxbridge_delivery,
             load_snapshot,
             save_snapshot,
             read_schedule_archive,
@@ -592,7 +710,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_capture_result, parse_pushplus_response, validate_pushplus_token};
+    use super::{decode_capture_result, dsh_delivery_status_for_paths, parse_pushplus_response, safe_dsh_delivery_path, validate_dsh_host, validate_pushplus_token};
+    use std::fs;
+    use std::path::PathBuf;
 
     #[test]
     fn parses_successful_pushplus_response() {
@@ -608,6 +728,35 @@ mod tests {
             .expect_err("business error");
         assert!(error.contains("token无效"));
         assert!(validate_pushplus_token("   ").is_err());
+    }
+
+    #[test]
+    fn accepts_only_loopback_dsh_hosts() {
+        assert_eq!(validate_dsh_host("127.0.0.1").expect("loopback"), "127.0.0.1");
+        assert_eq!(validate_dsh_host("localhost").expect("loopback"), "localhost");
+        assert!(validate_dsh_host("192.168.1.10").is_err());
+    }
+
+    #[test]
+    fn classifies_dsh_delivery_files_without_reading_message_contents() {
+        let root = std::env::temp_dir().join(format!("memoflow-dsh-test-{}", uuid::Uuid::new_v4()));
+        let outbox = root.join("outbox");
+        fs::create_dir_all(outbox.join("sent")).expect("create sent");
+        fs::create_dir_all(outbox.join("failed")).expect("create failed");
+        let pending = outbox.join("pending.json");
+        fs::write(&pending, b"{}").expect("write pending");
+        assert_eq!(dsh_delivery_status_for_paths(&pending, &outbox).status, "pending");
+        fs::remove_file(&pending).expect("remove pending");
+        fs::write(outbox.join("sent/pending.json"), b"{}").expect("write sent");
+        assert_eq!(dsh_delivery_status_for_paths(&pending, &outbox).status, "sent");
+        fs::remove_file(outbox.join("sent/pending.json")).expect("remove sent");
+        fs::write(outbox.join("failed/send-failed--pending.json"), b"{}").expect("write failed");
+        let failed = dsh_delivery_status_for_paths(&pending, &outbox);
+        assert_eq!(failed.status, "failed");
+        assert!(failed.error.is_some());
+        let rejected = safe_dsh_delivery_path(&root.join("outside.json").to_string_lossy(), &outbox);
+        assert!(rejected.is_err());
+        let _ = fs::remove_dir_all(PathBuf::from(root));
     }
 
     #[test]

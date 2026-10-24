@@ -12,14 +12,16 @@ export function getDueReminders(reminders: Reminder[], now = new Date()): Remind
 export interface SchedulerRepository {
   listReminders(): Reminder[] | Promise<Reminder[]>;
   markNotificationSent?: (id: string, sentAt: string) => void | Promise<void>;
-  markNotificationChannelSent?: (id: string, channel: 'native' | 'pushplus', sentAt: string) => void | Promise<void>;
-  markNotificationChannelFailed?: (id: string, channel: 'native' | 'pushplus', error: string) => void | Promise<void>;
+  markNotificationChannelQueued?: (id: string, channel: 'dsh', file: string, queuedAt?: string) => void | Promise<void>;
+  markNotificationChannelSent?: (id: string, channel: 'native' | 'pushplus' | 'dsh', sentAt: string) => void | Promise<void>;
+  markNotificationChannelFailed?: (id: string, channel: 'native' | 'pushplus' | 'dsh', error: string) => void | Promise<void>;
   flush?: () => void | Promise<void>;
 }
 
 export interface NotificationDeliveryResult {
   native?: { sent: boolean; error?: string };
   pushplus?: { sent: boolean; error?: string };
+  dsh?: { sent: boolean; pending?: boolean; queuedFile?: string; error?: string };
 }
 
 type NotifyResult = void | NotificationDeliveryResult;
@@ -37,7 +39,7 @@ export async function runReminderSchedulerTick(
     try {
       const result = await notify(reminder);
       const sentAt = new Date().toISOString();
-      const hasOutcome = Boolean(result && (result.native || result.pushplus));
+      const hasOutcome = Boolean(result && (result.native || result.pushplus || result.dsh));
       if (!hasOutcome || !repository.markNotificationChannelSent) {
         if (!repository.markNotificationSent) throw new Error('提醒存储不支持通知状态更新');
         await repository.markNotificationSent(reminder.id, sentAt);
@@ -46,9 +48,12 @@ export async function runReminderSchedulerTick(
       }
       const delivery = result as NotificationDeliveryResult;
       let deliveryError: Error | undefined;
-      for (const channel of ['native', 'pushplus'] as const) {
+      for (const channel of ['native', 'pushplus', 'dsh'] as const) {
         const outcome = delivery[channel];
         if (!outcome) continue;
+        if (channel === 'dsh' && 'queuedFile' in outcome && outcome.queuedFile && repository.markNotificationChannelQueued) {
+          await repository.markNotificationChannelQueued(reminder.id, channel, outcome.queuedFile, sentAt);
+        }
         if (outcome.sent) await repository.markNotificationChannelSent(reminder.id, channel, sentAt);
         else if (outcome.error) {
           if (repository.markNotificationChannelFailed) await repository.markNotificationChannelFailed(reminder.id, channel, outcome.error);

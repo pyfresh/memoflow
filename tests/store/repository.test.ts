@@ -36,10 +36,22 @@ describe('LocalRepository', () => {
     });
   });
 
-  it('persists PushPlus settings and migrates channel delivery state', () => {
-    expect(repository.getNotificationSettings()).toEqual({ pushplusEnabled: false, pushplusToken: '' });
+  it('persists notification settings and migrates channel delivery state', () => {
+    expect(repository.getNotificationSettings()).toEqual({
+      pushplusEnabled: false,
+      pushplusToken: '',
+      dshEnabled: false,
+      dshPort: 7239,
+      dshPeerId: '',
+    });
     repository.saveNotificationSettings({ pushplusEnabled: true, pushplusToken: 'token-123' });
-    expect(repository.getNotificationSettings()).toEqual({ pushplusEnabled: true, pushplusToken: 'token-123' });
+    expect(repository.getNotificationSettings()).toEqual({
+      pushplusEnabled: true,
+      pushplusToken: 'token-123',
+      dshEnabled: false,
+      dshPort: 7239,
+      dshPeerId: '',
+    });
 
     const reminder = repository.saveReminderDraft({ title: '双渠道提醒', dueAt: '2026-10-01T09:00', recurrenceRule: null });
     repository.markNotificationChannelSent(reminder.id, 'native', '2026-10-01T09:01:00.000Z');
@@ -50,6 +62,23 @@ describe('LocalRepository', () => {
 
     repository.markNotificationChannelSent(reminder.id, 'pushplus', '2026-10-01T09:02:00.000Z');
     expect(repository.load().reminders[0].notificationSentAt).toBe('2026-10-01T09:02:00.000Z');
+  });
+
+  it('waits for DSH delivery before completing a reminder', () => {
+    repository.saveNotificationSettings({ pushplusEnabled: false, pushplusToken: '', dshEnabled: true, dshPort: 7239, dshPeerId: 'peer-1' });
+    const reminder = repository.saveReminderDraft({ title: '微信提醒', dueAt: '2026-10-01T09:00', recurrenceRule: null });
+
+    repository.markNotificationChannelQueued(reminder.id, 'dsh', 'outbox/1.json', '2026-10-01T09:00:01.000Z');
+    expect(repository.load().reminders[0]).toMatchObject({
+      notificationSentAt: null,
+      delivery: { dshQueuedFile: 'outbox/1.json', dshSentAt: null },
+    });
+
+    repository.markNotificationChannelSent(reminder.id, 'dsh', '2026-10-01T09:00:02.000Z');
+    expect(repository.load().reminders[0]).toMatchObject({
+      notificationSentAt: '2026-10-01T09:00:02.000Z',
+      delivery: { dshQueuedFile: null, dshSentAt: '2026-10-01T09:00:02.000Z' },
+    });
   });
 
   it('records a PushPlus failure without clearing a successful native delivery', () => {

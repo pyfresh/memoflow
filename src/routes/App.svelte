@@ -18,6 +18,7 @@
   import { startOfWeek } from '$lib/domain/schedule';
   import { startReminderScheduler } from '$lib/reminders/scheduler';
   import { notifyCountdown, notifyReminder } from '$lib/notifications';
+  import { enqueueDshMessage } from '$lib/notifications/dsh';
   import { sendPushPlusReminder } from '$lib/notifications/pushplus';
   import { createDesktopPersistenceDriver } from '$lib/data/desktop';
   import { classifyBlackboardSource, normalizeCourseCode } from '$lib/import/normalize';
@@ -276,9 +277,12 @@
     try {
       const result = await notifyCountdown(countdown, notificationSettings);
       const sentAt = new Date().toISOString();
-      for (const channel of ['native', 'pushplus'] as const) {
+      for (const channel of ['native', 'pushplus', 'dsh'] as const) {
         const outcome = result[channel];
         if (!outcome) continue;
+        if (channel === 'dsh' && 'queuedFile' in outcome && outcome.queuedFile) {
+          repository.markCountdownNotificationChannelQueued(countdown.id, channel, outcome.queuedFile, sentAt);
+        }
         if (outcome.sent) repository.markCountdownNotificationChannelSent(countdown.id, channel, sentAt);
         else if (outcome.error) repository.markCountdownNotificationChannelFailed(countdown.id, channel, outcome.error);
       }
@@ -311,6 +315,14 @@
       recurrenceRule: null, status: 'pending', notificationSentAt: null,
       createdAt: now, updatedAt: now,
     }, token, undefined, 'test');
+  }
+
+  async function testDsh(settings: { port: number; peerId: string }) {
+    const result = await enqueueDshMessage({
+      text: 'MemoFlow DSH 微信桥接测试\n消息已提交，请在微信中确认是否收到。',
+      peerId: settings.peerId || undefined,
+    }, { port: settings.port });
+    return result;
   }
 
   function confirmImport(event: CustomEvent<BlackboardCapturePayload>) {
@@ -458,7 +470,7 @@
 {#if showNotificationSettings}
   <div class="overlay" role="presentation" on:click={(event) => event.target === event.currentTarget && (showNotificationSettings = false)}>
     <div class="modal" role="dialog" aria-modal="true" aria-label="通知设置">
-      <NotificationSettings settings={notificationSettings} on:save={saveNotificationSettings} onCancel={() => (showNotificationSettings = false)} onTest={testPushPlus} />
+      <NotificationSettings settings={notificationSettings} on:save={saveNotificationSettings} onCancel={() => (showNotificationSettings = false)} onTest={testPushPlus} onTestDsh={testDsh} />
     </div>
   </div>
 {/if}

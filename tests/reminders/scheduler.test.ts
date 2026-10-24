@@ -115,5 +115,44 @@ describe('runReminderSchedulerTick', () => {
     expect(marked).toEqual(['native-only']);
     expect(flushes).toBe(1);
   });
+
+  it('keeps a queued DSH message pending until a later tick reports sent', async () => {
+    const stored = reminder({ id: 'dsh-queued' });
+    const sent: string[] = [];
+    const queued: string[] = [];
+    const repository = {
+      listReminders: () => [stored],
+      markNotificationChannelQueued: (_id: string, _channel: string, file: string) => {
+        queued.push(file);
+        stored.delivery = {
+          nativeSentAt: stored.delivery?.nativeSentAt ?? null,
+          pushplusSentAt: stored.delivery?.pushplusSentAt ?? null,
+          pushplusLastError: stored.delivery?.pushplusLastError ?? null,
+          ...stored.delivery,
+          dshQueuedFile: file,
+        };
+      },
+      markNotificationChannelSent: (_id: string, channel: string) => {
+        sent.push(channel);
+        stored.delivery = {
+          nativeSentAt: stored.delivery?.nativeSentAt ?? null,
+          pushplusSentAt: stored.delivery?.pushplusSentAt ?? null,
+          pushplusLastError: stored.delivery?.pushplusLastError ?? null,
+          ...stored.delivery,
+          dshQueuedFile: null,
+          dshSentAt: '2026-10-01T10:01:00.000Z',
+        };
+      },
+      markNotificationChannelFailed: () => {},
+    };
+
+    await runReminderSchedulerTick(repository, async () => ({ dsh: { sent: false, pending: true, queuedFile: 'outbox/1.json' } }), new Date('2026-10-01T10:00:00+08:00'));
+    expect(queued).toEqual(['outbox/1.json']);
+    expect(sent).toEqual([]);
+    expect(stored.notificationSentAt).toBeNull();
+
+    await runReminderSchedulerTick(repository, async () => ({ dsh: { sent: true } }), new Date('2026-10-01T10:00:30+08:00'));
+    expect(sent).toEqual(['dsh']);
+  });
 });
 

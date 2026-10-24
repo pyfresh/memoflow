@@ -48,4 +48,22 @@ describe('countdown repository', () => {
 
     expect(repository.load().countdowns?.[0].notificationSentAt).toBe('2026-10-07T09:00:01.000Z');
   });
+
+  it('keeps a DSH countdown queued until the bridge reports delivery', () => {
+    const repository = createBrowserRepository();
+    repository.saveNotificationSettings({ pushplusEnabled: false, pushplusToken: '', dshEnabled: true, dshPort: 7239, dshPeerId: 'peer-1' });
+    const countdown = repository.createCountdown({ name: '微信倒计时', totalSeconds: 1 });
+
+    repository.markCountdownNotificationChannelQueued(countdown.id, 'dsh', 'C:\\Users\\test\\.dsh\\wxbridge\\outbox\\countdown.json', '2026-10-07T09:00:01.000Z');
+    expect(repository.load().countdowns?.[0]).toMatchObject({
+      notificationSentAt: null,
+      delivery: { dshQueuedFile: 'C:\\Users\\test\\.dsh\\wxbridge\\outbox\\countdown.json', dshSentAt: null },
+    });
+
+    repository.markCountdownNotificationChannelSent(countdown.id, 'dsh', '2026-10-07T09:00:02.000Z');
+    expect(repository.load().countdowns?.[0]).toMatchObject({
+      notificationSentAt: '2026-10-07T09:00:02.000Z',
+      delivery: { dshQueuedFile: null, dshSentAt: '2026-10-07T09:00:02.000Z' },
+    });
+  });
 });

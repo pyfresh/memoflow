@@ -2,18 +2,24 @@ export type ReminderStatus = 'pending' | 'completed' | 'ignored';
 export type BlackboardItemType = 'assignment' | 'project' | 'exam' | 'event' | 'other';
 export type BlackboardSourceKind = 'assignment' | 'event' | 'unknown';
 export type CourseScheduleSource = 'archive' | 'blackboard';
-export type NotificationChannel = 'native' | 'pushplus';
+export type NotificationChannel = 'native' | 'pushplus' | 'dsh';
 export type CountdownStatus = 'idle' | 'running' | 'paused' | 'completed';
 
 export interface NotificationSettings {
   pushplusEnabled: boolean;
   pushplusToken: string;
+  dshEnabled?: boolean;
+  dshPort?: number;
+  dshPeerId?: string;
 }
 
 export interface ReminderDeliveryState {
   nativeSentAt: string | null;
   pushplusSentAt: string | null;
   pushplusLastError: string | null;
+  dshQueuedFile?: string | null;
+  dshSentAt?: string | null;
+  dshLastError?: string | null;
 }
 
 export interface Countdown {

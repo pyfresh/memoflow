@@ -1,5 +1,6 @@
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import type { Countdown, NotificationSettings, Reminder } from './domain/types';
+import { buildDshCountdownText, buildDshReminderText, defaultDshTransport, type DshNotificationTransport } from './notifications/dsh';
 import { sendPushPlusCountdown, sendPushPlusReminder, type PushPlusTransport } from './notifications/pushplus';
 
 function isTauri(): boolean {
@@ -9,6 +10,7 @@ function isTauri(): boolean {
 export interface ReminderNotificationResult {
   native?: { sent: boolean; error?: string };
   pushplus?: { sent: boolean; error?: string };
+  dsh?: { sent: boolean; pending?: boolean; queuedFile?: string; error?: string };
 }
 
 function countdownReminder(countdown: Countdown): Reminder {
@@ -29,9 +31,10 @@ function countdownReminder(countdown: Countdown): Reminder {
 
 export async function notifyReminder(
   reminder: Reminder,
-  settings: NotificationSettings = { pushplusEnabled: false, pushplusToken: '' },
-  context: { courseCode?: string; itemType?: string } = {},
+  settings: NotificationSettings = { pushplusEnabled: false, pushplusToken: '', dshEnabled: false, dshPort: 7239, dshPeerId: '' },
+  context: { courseCode?: string; itemType?: string; dshText?: string } = {},
   pushplusTransport?: PushPlusTransport,
+  dshTransport?: DshNotificationTransport,
 ): Promise<ReminderNotificationResult> {
   const result: ReminderNotificationResult = {};
   const title = 'MemoFlow 提醒';
@@ -55,6 +58,22 @@ export async function notifyReminder(
       result.native = { sent: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
+  if (settings.dshEnabled === true && !reminder.delivery?.dshSentAt) {
+    try {
+      const transport = dshTransport ?? defaultDshTransport({ port: settings.dshPort ?? 7239 });
+      if (reminder.delivery?.dshQueuedFile) {
+        const status = await transport.check(reminder.delivery.dshQueuedFile);
+        if (status.status === 'sent') result.dsh = { sent: true };
+        else if (status.status === 'failed') result.dsh = { sent: false, error: status.error ?? '微信桥发送失败' };
+        else result.dsh = { sent: false, pending: true };
+      } else {
+        const queued = await transport.enqueue({ text: context.dshText ?? buildDshReminderText(reminder, context.courseCode, context.itemType), peerId: settings.dshPeerId?.trim() || undefined });
+        result.dsh = { sent: false, pending: true, queuedFile: queued.file };
+      }
+    } catch (error) {
+      result.dsh = { sent: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
   if (settings.pushplusEnabled && settings.pushplusToken.trim() && !reminder.delivery?.pushplusSentAt) {
     try {
       await sendPushPlusReminder(reminder, settings.pushplusToken, context.courseCode, context.itemType, pushplusTransport);
@@ -68,11 +87,12 @@ export async function notifyReminder(
 
 export function notifyCountdown(
   countdown: Countdown,
-  settings: NotificationSettings = { pushplusEnabled: false, pushplusToken: '' },
+  settings: NotificationSettings = { pushplusEnabled: false, pushplusToken: '', dshEnabled: false, dshPort: 7239, dshPeerId: '' },
   pushplusTransport?: PushPlusTransport,
+  dshTransport?: DshNotificationTransport,
 ): Promise<ReminderNotificationResult> {
   const reminder = countdownReminder(countdown);
-  return notifyReminder(reminder, { ...settings, pushplusEnabled: false }, {}, pushplusTransport).then(async (result) => {
+  return notifyReminder(reminder, { ...settings, pushplusEnabled: false }, { dshText: buildDshCountdownText(countdown) }, pushplusTransport, dshTransport).then(async (result) => {
     if (!settings.pushplusEnabled || !settings.pushplusToken.trim() || countdown.delivery?.pushplusSentAt) return result;
     try {
       await sendPushPlusCountdown(countdown, settings.pushplusToken, pushplusTransport);
