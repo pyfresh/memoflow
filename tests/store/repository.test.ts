@@ -36,6 +36,20 @@ describe('LocalRepository', () => {
     });
   });
 
+  it('creates an inbound DSH reminder through the existing repository contract', () => {
+    const first = repository.createInboundReminder({
+      title: '考试', body: '下周一下午有一门考试', dueAt: '2026-10-26T15:00+08:00', externalId: 'dsh:test:exam', source: 'dsh',
+    });
+    const second = repository.createInboundReminder({
+      title: '考试', body: '下周一下午有一门考试', dueAt: '2026-10-26T15:00+08:00', externalId: 'dsh:test:exam', source: 'dsh',
+    });
+
+    expect(second.id).toBe(first.id);
+    expect(repository.load().memos).toHaveLength(1);
+    expect(repository.load().reminders).toMatchObject([{ memoId: first.id, title: '考试', dueAt: '2026-10-26T15:00:00+08:00' }]);
+    expect(repository.load().memos[0].richText).toContain('下周一下午有一门考试');
+  });
+
   it('persists notification settings and migrates channel delivery state', () => {
     expect(repository.getNotificationSettings()).toEqual({
       pushplusEnabled: false,

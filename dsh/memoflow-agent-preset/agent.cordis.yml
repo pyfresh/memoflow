@@ -1,0 +1,37 @@
+# MemoFlow 微信备忘录 agent preset
+#
+# 注意两件事（2026-10-25 真实链路测试结论）：
+#   1. preset 的每一行都必须带 `name`。只写 `- id: xxx` + `disabled: true` 会让整个
+#      preset 挂载失败：`agent-presets: preset "memoflow" failed to mount: row 1 names no plugin`。
+#   2. 即使给这些行补上 `name`，preset 里的 disabled 行也关不掉宿主已经挂载的
+#      shell / 文件 / 技能 / 子 agent 工具（实测仍可调用 pwsh 读工作区）。
+#      要真正收窄工具，必须在 profile 补丁层禁用（如 acp-overlay 里的 `- id: tool-pwsh / disabled: true`）。
+#
+# 所以这里只声明本组合真正需要的两件东西：
+#   1. persona：约束「时段不等于具体时刻、缺时间只调一次工具并结束本轮」；
+#   2. memoflow-mcp：受令牌保护的本地 create_reminder 工具。
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    complete: true
+    prefix: >-
+      你是 MemoFlow 的微信备忘录助手，只处理用户明确要求记录的备忘录和提醒，并用中文简洁反馈。除 mcp__memoflow__create_reminder 外不要调用其他工具（包括 shell、文件、技能和子 agent）。
+      当前日期和时区以系统提供的信息为准，使用 Asia/Hong_Kong。收到自然语言日期后先解析为具体日期。
+       “上午、下午、晚上”等时段不是具体时刻：不要擅自改成 14:00、15:00 或任何固定小时。日期和时段都已识别但缺少 HH:mm 时，只调用一次 mcp__memoflow__create_reminder，传入 date、timeOfDay 和原始 body，让工具返回 needs_confirmation；不要调用 ask_user、不要调用其他工具、不要等待用户回复，也不要重试。随后用一条简洁消息说明“已识别日期和时段，但还没有写入；请在下一条消息补充具体几点几分（例如‘下午3点’）”，并明确本轮结束。下一条消息带有具体时间时，沿用上一条消息中的日期、标题和原文调用同一个工具；若日期本身无法确定，只说明缺少日期并结束本轮，不循环追问。
+      当用户补充了具体时间后，调用同一个工具，传入 title、body、date、time，source 固定为 dsh。必须读取工具返回的 status：needs_confirmation 要明确告诉用户还缺少具体时间并结束本轮，created 才能说已写入，error 要如实说明失败原因并结束本轮。不要直接编辑任何数据库、配置或其他文件，也不要把工具调用成功误报为事项已创建。
+
+- id: memoflow-mcp
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: memoflow
+    transport: stdio
+    command: !!js process.execPath
+    args:
+      # DSH desktop can point at a staged copy; production falls back to the
+      # conventional per-user location on Windows and Unix-like hosts.
+      - !!js 'process.env.MEMOFLOW_MCP_SERVER || ((process.env.USERPROFILE || process.env.HOME || process.cwd()) + "/.dsh/memoflow/memoflow-mcp-server.mjs")'
+    failOnStartupError: true
+    toolCallTimeoutMs: 10000
+    reconnect:
+      enabled: true
+      maxAttempts: 5

@@ -31,7 +31,7 @@ function countdownReminder(countdown: Countdown): Reminder {
 
 export async function notifyReminder(
   reminder: Reminder,
-  settings: NotificationSettings = { pushplusEnabled: false, pushplusToken: '', dshEnabled: false, dshPort: 7239, dshPeerId: '' },
+  settings: NotificationSettings = { pushplusEnabled: false, pushplusToken: '', dshEnabled: false, dshPort: 0, dshPeerId: '' },
   context: { courseCode?: string; itemType?: string; dshText?: string } = {},
   pushplusTransport?: PushPlusTransport,
   dshTransport?: DshNotificationTransport,
@@ -60,11 +60,14 @@ export async function notifyReminder(
   }
   if (settings.dshEnabled === true && !reminder.delivery?.dshSentAt) {
     try {
-      const transport = dshTransport ?? defaultDshTransport({ port: settings.dshPort ?? 7239 });
+      // A missing port lets the desktop Rust transport discover DSH's current
+      // loopback port from host-address.json. An explicit value remains a
+      // compatibility override for older bridge installations.
+      const transport = dshTransport ?? defaultDshTransport({ port: settings.dshPort ?? 0 });
       if (reminder.delivery?.dshQueuedFile) {
         const status = await transport.check(reminder.delivery.dshQueuedFile);
         if (status.status === 'sent') result.dsh = { sent: true };
-        else if (status.status === 'failed') result.dsh = { sent: false, error: status.error ?? '微信桥发送失败' };
+        else if (status.status === 'failed' || status.status === 'unknown') result.dsh = { sent: false, error: status.error ?? '微信桥队列状态未知，请重新测试桥接' };
         else result.dsh = { sent: false, pending: true };
       } else {
         const queued = await transport.enqueue({ text: context.dshText ?? buildDshReminderText(reminder, context.courseCode, context.itemType), peerId: settings.dshPeerId?.trim() || undefined });
@@ -87,7 +90,7 @@ export async function notifyReminder(
 
 export function notifyCountdown(
   countdown: Countdown,
-  settings: NotificationSettings = { pushplusEnabled: false, pushplusToken: '', dshEnabled: false, dshPort: 7239, dshPeerId: '' },
+  settings: NotificationSettings = { pushplusEnabled: false, pushplusToken: '', dshEnabled: false, dshPort: 0, dshPeerId: '' },
   pushplusTransport?: PushPlusTransport,
   dshTransport?: DshNotificationTransport,
 ): Promise<ReminderNotificationResult> {

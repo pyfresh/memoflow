@@ -2,6 +2,7 @@ import { advanceReminderOccurrence, parseLocalIso, shiftLocalDays } from '../dom
 import type { BlackboardItem, BlackboardSourceKind, Countdown, CourseScheduleEntry, CourseScheduleSource, ImportCandidate, Memo, NotificationChannel, NotificationSettings, Reminder, ReminderDeliveryState, ReminderStatus, ScheduleCandidate } from '../domain/types';
 import { advanceCountdown } from '../domain/countdowns';
 import { normalizeCourseCode } from '../import/normalize';
+import type { InboundReminderInput } from '../inbound/memoflow-tool';
 
 export interface StorageLike {
   getItem(key: string): string | null;
@@ -277,6 +278,28 @@ export class LocalRepository {
       reminderId = reminder.id;
     } else if (reminderId) { snapshot.reminders = snapshot.reminders.filter((item) => item.id !== reminderId); reminderId = null; }
     this.write(snapshot); return { ...memo, reminderId };
+  }
+
+  createInboundReminder(input: InboundReminderInput): SavedMemo {
+    const title = input.title.trim();
+    const body = (input.body ?? '').trim();
+    const externalId = input.externalId?.trim() || null;
+    if (!title) throw new Error('事项名称不能为空');
+    if (!input.dueAt?.trim()) throw new Error('提醒时间不能为空');
+    if (input.dueAt.length > 80 || body.length > 10_000 || (externalId?.length ?? 0) > 200) throw new Error('入站事项字段过长');
+
+    const snapshot = this.load();
+    const existingMemo = externalId ? snapshot.memos.find((memo) => memo.externalItemId === externalId) : undefined;
+    return this.saveMemoDraft({
+      id: existingMemo?.id,
+      title,
+      body: body || `<p>${title}</p>`,
+      reminderAt: input.dueAt,
+      recurrenceRule: input.recurrenceRule ?? null,
+      source: 'manual',
+      externalItemId: externalId,
+      tags: ['dsh'],
+    });
   }
 
   saveReminderDraft(draft: ReminderDraft, existingSnapshot?: AppSnapshot, timestamp = nowIso()): Reminder {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildDshCountdownText, buildDshReminderText, createBrowserDshTransport, validateDshHost } from '../../src/lib/notifications/dsh';
+import { buildDshCountdownText, buildDshReminderText, checkDshPreflight, createBrowserDshTransport, parseDshDeliveryStatus, parseDshPreflight, validateDshHost } from '../../src/lib/notifications/dsh';
 import { notifyReminder } from '../../src/lib/notifications';
 
 describe('DSH wxbridge adapter', () => {
@@ -19,6 +19,28 @@ describe('DSH wxbridge adapter', () => {
     expect(validateDshHost('127.0.0.1')).toBe('127.0.0.1');
     expect(validateDshHost('localhost')).toBe('localhost');
     expect(() => validateDshHost('192.168.1.20')).toThrow('回环地址');
+  });
+
+  it('accepts explicit unknown delivery state instead of treating a missing file as pending forever', () => {
+    expect(parseDshDeliveryStatus({ status: 'unknown', error: '队列文件不存在' })).toEqual({ status: 'unknown', error: '队列文件不存在' });
+  });
+
+  it('validates bridge preflight and preserves the discovered port', async () => {
+    const result = parseDshPreflight({
+      ok: true,
+      port: 7768,
+      message: 'DSH 真实链路可用',
+      checks: [{ name: 'bridge', ok: true, detail: 'phase=idle' }],
+    });
+    expect(result).toMatchObject({ ok: true, port: 7768 });
+
+    const invoke = vi.fn().mockResolvedValue(result);
+    await expect(checkDshPreflight(invoke)).resolves.toEqual(result);
+    expect(invoke).toHaveBeenCalledWith('check_dsh_preflight');
+  });
+
+  it('rejects malformed preflight responses', () => {
+    expect(() => parseDshPreflight({ ok: true, port: 7239 })).toThrow('检查结果');
   });
 
   it('queues a message through the local host route and preserves the returned file', async () => {

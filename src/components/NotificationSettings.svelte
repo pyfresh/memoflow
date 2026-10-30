@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import type { NotificationSettings } from '$lib/domain/types';
+  import type { DshPreflightResult } from '$lib/notifications/dsh';
 
   type DshTestSettings = { port: number; peerId: string };
 
@@ -15,6 +16,7 @@
   export let onCancel: () => void = () => {};
   export let onTest: (token: string) => Promise<void> = async () => {};
   export let onTestDsh: (settings: DshTestSettings) => Promise<{ file?: string } | void> = async () => {};
+  export let onCheckDsh: () => Promise<DshPreflightResult> = async () => ({ ok: false, port: null, message: '未执行检查', checks: [] });
 
   const dispatch = createEventDispatcher<{
     save: NotificationSettings;
@@ -31,7 +33,9 @@
   let pushplusToken = settings.pushplusToken ?? '';
   let status = '';
   let testingDsh = false;
+  let checkingDsh = false;
   let testingPushplus = false;
+  let dshPreflight: DshPreflightResult | null = null;
 
   function buildSettings(): NotificationSettings {
     const next: NotificationSettings = {
@@ -80,6 +84,23 @@
       status = error instanceof Error ? error.message : String(error);
     } finally {
       testingDsh = false;
+    }
+  }
+
+  async function checkDsh() {
+    checkingDsh = true;
+    status = '';
+    try {
+      dshPreflight = await onCheckDsh();
+      const failed = dshPreflight.checks.filter((check) => !check.ok);
+      status = dshPreflight.ok
+        ? `DSH 链路检查通过，实际端口：${dshPreflight.port ?? '未知'}`
+        : `DSH 链路检查未通过${failed.length ? `：${failed.map((check) => `${check.name}：${check.detail}`).join('；')}` : ''}`;
+    } catch (error) {
+      dshPreflight = null;
+      status = error instanceof Error ? error.message : String(error);
+    } finally {
+      checkingDsh = false;
     }
   }
 
@@ -134,8 +155,18 @@
         <input aria-label="DSH 接收方 ID" type="text" autocomplete="off" bind:value={dshPeerId} placeholder="留空使用当前配对会话" />
       </label>
     </div>
-    <p class="hint">默认端口 7239。请先在 DSH 桌面端完成微信配对；“测试消息”加入队列后，最终送达状态以微信实际收到为准。</p>
-    <button class="secondary test-button" type="button" disabled={testingDsh || testingPushplus} on:click={testDsh}>{testingDsh ? '提交中…' : '发送 DSH 测试消息'}</button>
+    <p class="hint">端口 7239 仅作兼容回退，桌面端会优先发现 DSH 的动态端口。请先完成微信配对；测试消息只有进入 sent 后才算桥接发送成功，手机显示仍需人工确认。</p>
+    <div class="dsh-actions">
+      <button class="secondary test-button" type="button" disabled={checkingDsh || testingDsh || testingPushplus} on:click={checkDsh}>{checkingDsh ? '检查中…' : '检测 DSH 链路'}</button>
+      <button class="secondary test-button" type="button" disabled={checkingDsh || testingDsh || testingPushplus} on:click={testDsh}>{testingDsh ? '提交中…' : '发送 DSH 测试消息'}</button>
+    </div>
+    {#if dshPreflight}
+      <ul class="preflight-list" aria-label="DSH 链路检查结果">
+        {#each dshPreflight.checks as check}
+          <li class:check-ok={check.ok} class:check-failed={!check.ok}><span aria-hidden="true">{check.ok ? '✓' : '!'}</span><span>{check.name}：{check.detail}</span></li>
+        {/each}
+      </ul>
+    {/if}
   </section>
 
   <section class="channel-card fallback-card" aria-label="PushPlus 备用通知">
@@ -194,6 +225,12 @@
   .field input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(7,143,131,.12); }
   .hint { margin:0; color:var(--ink-muted); font-size:.7rem; line-height:1.5; }
   .test-button { align-self:flex-start; }
+  .dsh-actions { display:flex; flex-wrap:wrap; gap:8px; }
+  .preflight-list { display:flex; flex-direction:column; gap:5px; margin:0; padding:0; list-style:none; color:var(--ink-muted); font-size:.7rem; line-height:1.4; }
+  .preflight-list li { display:flex; align-items:flex-start; gap:6px; }
+  .preflight-list li span:first-child { display:inline-grid; place-items:center; width:15px; height:15px; border-radius:50%; background:var(--line); color:var(--ink-soft); font-size:.64rem; font-weight:800; }
+  .preflight-list .check-ok span:first-child { background:rgba(40,160,105,.14); color:#218552; }
+  .preflight-list .check-failed span:first-child { background:rgba(196,72,73,.14); color:#b73f45; }
   .status { margin:0; color:var(--accent-strong); font-size:.78rem; font-weight:650; }
   .actions { display:flex; align-items:center; gap:8px; margin-top:2px; }
   .spacer { flex:1; }

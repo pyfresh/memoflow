@@ -1,0 +1,4 @@
+name: MemoFlow 微信备忘录
+description: 通过受限本地 MCP 工具把微信中的自然语言日期写入 MemoFlow，并在时间不明确时先追问。ClawBot/iLink 仅负责微信传输，不作为 Agent 或 MCP 工具调用。
+order: 20
+

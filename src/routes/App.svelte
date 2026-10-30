@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { listen } from '@tauri-apps/api/event';
   import BlackboardImportDialog from '../components/BlackboardImportDialog.svelte';
   import CourseScheduleImportDialog from '../components/CourseScheduleImportDialog.svelte';
   import CountdownPage from '../components/CountdownPage.svelte';
@@ -18,9 +19,10 @@
   import { startOfWeek } from '$lib/domain/schedule';
   import { startReminderScheduler } from '$lib/reminders/scheduler';
   import { notifyCountdown, notifyReminder } from '$lib/notifications';
-  import { enqueueDshMessage } from '$lib/notifications/dsh';
+  import { checkDshPreflight, enqueueDshMessage } from '$lib/notifications/dsh';
   import { sendPushPlusReminder } from '$lib/notifications/pushplus';
   import { createDesktopPersistenceDriver } from '$lib/data/desktop';
+  import { createDesktopSnapshotReloader, monthStartForDueAt } from '$lib/data/desktop-refresh';
   import { classifyBlackboardSource, normalizeCourseCode } from '$lib/import/normalize';
 
   const desktopPersistence = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window ? createDesktopPersistenceDriver() : undefined;
@@ -49,10 +51,14 @@
   let calendarItems: CalendarItem[] = buildCalendarItems(snapshot, currentMonth);
   let calendarVersion = 0;
 
+  function localDateOnly(date: Date): string {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  }
+
   function monthBounds(date: Date): [string, string] {
     const start = new Date(date.getFullYear(), date.getMonth(), 1);
     const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-    return [start.toISOString().slice(0, 10), end.toISOString().slice(0, 10)];
+    return [localDateOnly(start), localDateOnly(end)];
   }
 
   function memoCategory(memo: Memo | undefined): string {
@@ -128,6 +134,8 @@
     notificationSettings = repository.getNotificationSettings();
     calendarItems = buildCalendarItems(snapshot, currentMonth);
   }
+
+  const reloadDesktopSnapshot = createDesktopSnapshotReloader(repository, refresh);
 
   function changeCalendarMonth(event: CustomEvent<Date>) {
     currentMonth = event.detail;
@@ -318,11 +326,20 @@
   }
 
   async function testDsh(settings: { port: number; peerId: string }) {
+    const preflight = await checkDshPreflight();
+    if (!preflight.ok) {
+      const failed = preflight.checks.filter((check) => !check.ok).map((check) => `${check.name}：${check.detail}`);
+      throw new Error(`DSH 链路预检未通过${failed.length ? `：${failed.join('；')}` : ''}`);
+    }
     const result = await enqueueDshMessage({
       text: 'MemoFlow DSH 微信桥接测试\n消息已提交，请在微信中确认是否收到。',
       peerId: settings.peerId || undefined,
     }, { port: settings.port });
     return result;
+  }
+
+  async function checkDsh() {
+    return checkDshPreflight();
   }
 
   function confirmImport(event: CustomEvent<BlackboardCapturePayload>) {
@@ -356,8 +373,24 @@
 
   onMount(() => {
     let stop: (() => void) | undefined;
+    let stopDshInbound: (() => void) | undefined;
     const lastCountdownTickAt = { value: Date.now() };
     const countdownTimer = window.setInterval(() => tickCountdowns(lastCountdownTickAt), 1000);
+    const refreshFromDesktop = () => {
+      if (desktopPersistence) void reloadDesktopSnapshot();
+    };
+    const handleDshInbound = async (event: { payload: { status?: string; title?: string; dueAt?: string } }) => {
+      if (event.payload?.status !== 'created') return;
+      await reloadDesktopSnapshot();
+      const dueMonth = event.payload.dueAt ? monthStartForDueAt(event.payload.dueAt) : null;
+      if (dueMonth && (dueMonth.getFullYear() !== currentMonth.getFullYear() || dueMonth.getMonth() !== currentMonth.getMonth())) {
+        currentMonth = dueMonth;
+        calendarItems = buildCalendarItems(snapshot, currentMonth);
+        calendarVersion += 1;
+      }
+      const title = event.payload.title?.trim();
+      syncMessage = title ? `微信已写入“${title}”，页面已更新。` : '微信已写入新事项，页面已更新。';
+    };
     const initialize = async () => {
       if (desktopPersistence) await repository.loadAsync();
       refresh();
@@ -369,8 +402,21 @@
         return notifyReminder(reminder, notificationSettings, { courseCode: item?.courseCode ?? undefined, itemType: item?.itemType ?? undefined });
       });
     };
+    if (desktopPersistence) {
+      listen<{ status?: string; title?: string; dueAt?: string }>('dsh-inbound-created', handleDshInbound).then((unlisten) => {
+        stopDshInbound = unlisten;
+      });
+      window.addEventListener('focus', refreshFromDesktop);
+      document.addEventListener('visibilitychange', refreshFromDesktop);
+    }
     void initialize();
-    return () => { stop?.(); window.clearInterval(countdownTimer); };
+    return () => {
+      stop?.();
+      stopDshInbound?.();
+      window.removeEventListener('focus', refreshFromDesktop);
+      document.removeEventListener('visibilitychange', refreshFromDesktop);
+      window.clearInterval(countdownTimer);
+    };
   });
 </script>
 
@@ -470,7 +516,7 @@
 {#if showNotificationSettings}
   <div class="overlay" role="presentation" on:click={(event) => event.target === event.currentTarget && (showNotificationSettings = false)}>
     <div class="modal" role="dialog" aria-modal="true" aria-label="通知设置">
-      <NotificationSettings settings={notificationSettings} on:save={saveNotificationSettings} onCancel={() => (showNotificationSettings = false)} onTest={testPushPlus} onTestDsh={testDsh} />
+      <NotificationSettings settings={notificationSettings} on:save={saveNotificationSettings} onCancel={() => (showNotificationSettings = false)} onTest={testPushPlus} onTestDsh={testDsh} onCheckDsh={checkDsh} />
     </div>
   </div>
 {/if}
